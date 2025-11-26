@@ -161,7 +161,7 @@ class APIConverter {
       // 记住当前激活标签
       try {
         localStorage.setItem("active_tab", tabName);
-      } catch (_) {}
+      } catch (_) { }
       // 将焦点移到第一个可聚焦元素，提升无障碍体验
       const firstFocusable = activeContent.querySelector(
         "input, select, textarea, button"
@@ -169,7 +169,7 @@ class APIConverter {
       if (firstFocusable) {
         try {
           firstFocusable.focus();
-        } catch (_) {}
+        } catch (_) { }
       }
     }
   }
@@ -333,9 +333,8 @@ class APIConverter {
         progressText.textContent = "检测中...";
       }
     } else if (progress.status === "waiting") {
-      progressText.textContent = `⏱️ ${
-        progress.current_capability || "等待中..."
-      }`;
+      progressText.textContent = `⏱️ ${progress.current_capability || "等待中..."
+        }`;
     } else if (progress.status === "completed") {
       progressText.textContent = "检测完成！";
     }
@@ -404,8 +403,8 @@ class APIConverter {
 
             <div class="detection-info fade-in">
                 <p><strong>检测时间:</strong> ${new Date(
-                  results.detection_time
-                ).toLocaleString()}</p>
+      results.detection_time
+    ).toLocaleString()}</p>
                 <p><strong>模型:</strong> ${results.models.join(", ")}</p>
                 <p><strong>API基础URL:</strong> ${results.base_url}</p>
             </div>
@@ -440,20 +439,18 @@ class APIConverter {
                     <td><span class="status-badge ${statusClass}">${statusText}</span></td>
                     <td>${responseTime}</td>
                     <td>
-                        ${
-                          result.error
-                            ? `<span class="error-text">${result.error}</span>`
-                            : ""
-                        }
-                        ${
-                          result.details
-                            ? `<pre class="details-text">${JSON.stringify(
-                                result.details,
-                                null,
-                                2
-                              )}</pre>`
-                            : ""
-                        }
+                        ${result.error
+            ? `<span class="error-text">${result.error}</span>`
+            : ""
+          }
+                        ${result.details
+            ? `<pre class="details-text">${JSON.stringify(
+              result.details,
+              null,
+              2
+            )}</pre>`
+            : ""
+          }
                     </td>
                 </tr>
             `;
@@ -502,14 +499,12 @@ class APIConverter {
     row.style.display = "contents";
     row.innerHTML = `
             <div class="form-group">
-                <input type="text" class="model-original" placeholder="请求模型名 (如 A1)" value="${
-                  original || ""
-                }">
+                <input type="text" class="model-original" placeholder="请求模型名 (如 A1)" value="${original || ""
+      }">
             </div>
             <div class="form-group">
-                <input type="text" class="model-mapped" placeholder="映射模型名 (如 B1)" value="${
-                  mapped || ""
-                }">
+                <input type="text" class="model-mapped" placeholder="映射模型名 (如 B1)" value="${mapped || ""
+      }">
             </div>
             <div class="form-group" style="display:flex; align-items:center;">
                 <button type="button" class="btn-danger" title="删除映射">删除</button>
@@ -727,14 +722,33 @@ class APIConverter {
       return;
     }
 
-    const channelsHTML = this.channels
+    // 对渠道进行智能排序
+    const sortedChannels = [...this.channels].sort((a, b) => {
+      // 1. 启用状态优先 (enabled=true排前面)
+      if (a.enabled !== b.enabled) {
+        return b.enabled - a.enabled; // true(1) > false(0)
+      }
+
+      // 2. 权重降序 (高权重排前面)
+      const weightA = a.weight || 100;
+      const weightB = b.weight || 100;
+      if (weightA !== weightB) {
+        return weightB - weightA;
+      }
+
+      // 3. 创建时间升序 (早创建的排前面)
+      const timeA = new Date(a.created_at).getTime();
+      const timeB = new Date(b.created_at).getTime();
+      return timeA - timeB;
+    });
+
+    const channelsHTML = sortedChannels
       .map((channel) => {
         // 构建代理信息显示
         const proxyInfo =
           channel.proxy_host && channel.proxy_port
-            ? `${channel.proxy_type || "http"}://${channel.proxy_host}:${
-                channel.proxy_port
-              }${channel.proxy_username ? " (认证)" : ""}`
+            ? `${channel.proxy_type || "http"}://${channel.proxy_host}:${channel.proxy_port
+            }${channel.proxy_username ? " (认证)" : ""}`
             : "未配置";
         // 模型映射摘要
         const mappingCount = channel.models_mapping
@@ -746,42 +760,34 @@ class APIConverter {
             : "";
 
         return `
-            <div class="channel-item ${
-              channel.enabled ? "enabled" : "disabled"
-            }">
+            <div class="channel-item ${channel.enabled ? "enabled" : "disabled"
+          }">
                 <div class="channel-info">
                     <h4>${channel.name}</h4>
-                    <p><strong>提供商:</strong> <span class="provider-badge provider-${
-                      channel.provider
-                    }">${(channel.provider || "").toUpperCase()}</span></p>
+                    <p><strong>提供商:</strong> <span class="provider-badge provider-${channel.provider
+          }">${(channel.provider || "").toUpperCase()}</span></p>
                     <p><strong>URL:</strong> ${channel.base_url}</p>
-<p><strong>权重:</strong> <span class="weight-badge">${
-          channel.weight || 100
-        }</span></p>
+<p><strong>权重:</strong> <span class="weight-badge">${channel.weight || 100
+          }</span></p>
                     <p><strong>代理:</strong> ${proxyInfo}</p>
-                    <p><strong>状态:</strong> <span class="status-chip ${
-                      channel.enabled ? "enabled" : "disabled"
-                    }">${channel.enabled ? "启用" : "禁用"}</span></p>
+                    <p><strong>状态:</strong> <span class="status-chip ${channel.enabled ? "enabled" : "disabled"
+          }">${channel.enabled ? "启用" : "禁用"}</span></p>
                     ${mappingSummary}
                     <p><small>创建时间: ${new Date(
-                      channel.created_at
-                    ).toLocaleString()}</small></p>
+            channel.created_at
+          ).toLocaleString()}</small></p>
                 </div>
                 <div class="channel-actions">
-                    <button onclick="apiConverter.testChannel('${
-                      channel.id
-                    }')" class="btn-secondary">测试</button>
-                    <button onclick="apiConverter.editChannel('${
-                      channel.id
-                    }')" class="btn-primary">编辑</button>
-                    <button onclick="apiConverter.toggleChannel('${
-                      channel.id
-                    }')" class="btn-secondary">
+                    <button onclick="apiConverter.testChannel('${channel.id
+          }')" class="btn-secondary">测试</button>
+                    <button onclick="apiConverter.editChannel('${channel.id
+          }')" class="btn-primary">编辑</button>
+                    <button onclick="apiConverter.toggleChannel('${channel.id
+          }')" class="btn-secondary">
                         ${channel.enabled ? "禁用" : "启用"}
                     </button>
-                    <button onclick="apiConverter.deleteChannel('${
-                      channel.id
-                    }')" class="btn-danger">删除</button>
+                    <button onclick="apiConverter.deleteChannel('${channel.id
+          }')" class="btn-danger">删除</button>
                 </div>
             </div>
             `;
@@ -1420,14 +1426,12 @@ function showProxyTestResult(result) {
                 <h4><span class="status-icon success">✓</span> 代理连接测试成功</h4>
                 <div class="test-summary">
                     <span>代理类型: <strong>${result.proxy_info.type.toUpperCase()}</strong></span>
-                    <span>地址: <strong>${result.proxy_info.host}:${
-      result.proxy_info.port
-    }</strong></span>
-                    ${
-                      result.proxy_info.has_auth
-                        ? "<span>认证: <strong>已启用</strong></span>"
-                        : ""
-                    }
+                    <span>地址: <strong>${result.proxy_info.host}:${result.proxy_info.port
+      }</strong></span>
+                    ${result.proxy_info.has_auth
+        ? "<span>认证: <strong>已启用</strong></span>"
+        : ""
+      }
                 </div>
         `;
 
@@ -1459,9 +1463,8 @@ function showProxyTestResult(result) {
             <div class="test-result error">
                 <h4><span class="status-icon error">✗</span> 代理连接测试失败</h4>
                 <div class="test-summary">
-                    <span>错误信息: <strong>${
-                      result.message || "未知错误"
-                    }</strong></span>
+                    <span>错误信息: <strong>${result.message || "未知错误"
+      }</strong></span>
                 </div>
         `;
 
@@ -1614,7 +1617,7 @@ async function copyToClipboard(text) {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch (_) {}
+  } catch (_) { }
   // 回退方法
   try {
     const ta = document.createElement("textarea");
@@ -1660,8 +1663,8 @@ function showToast(message, type = "info") {
       (type === "success"
         ? "#c8e6c9"
         : type === "error"
-        ? "#ffcdd2"
-        : "#e0e0e0");
+          ? "#ffcdd2"
+          : "#e0e0e0");
     toast.style.color =
       type === "success" ? "#2d7d32" : type === "error" ? "#c62828" : "#333";
     toast.style.transition = "transform .2s ease, opacity .2s ease";
