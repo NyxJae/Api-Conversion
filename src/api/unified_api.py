@@ -545,14 +545,16 @@ async def handle_streaming_response(response, channel, request_data, source_form
             # 记录所有接收到的行用于调试
             logger.debug(f"Received SSE line: '{line}'")
             
-            # 只处理以 "data: " 开头的行，其余 SSE 行（如 event: keep-alive）直接忽略
-            if not line.startswith("data: "):
-                # 记录被忽略的行，特别关注思考模型可能的特殊格式
+            # 处理以 "data:" 开头的行（支持有无空格两种格式）
+            # 标准SSE: "data: {JSON}" 或 iFlow GLM: "data:{JSON}"
+            if line.startswith("data:"):
+                # 移除 "data:" 前缀，并去除可能的前导空格
+                data_content = line[5:].lstrip()
+            else:
+                # 其余 SSE 行（如 event: keep-alive）直接忽略
                 if line.strip():  # 只记录非空行
                     logger.debug(f"Ignored non-data SSE line: '{line}'")
                 continue
-
-            data_content = line[6:]  # 移除 "data: " 前缀
             chunk_count += 1
             logger.debug(f"RAW CHUNK {chunk_count}: '{data_content}'")  # 详细记录原始数据
 
