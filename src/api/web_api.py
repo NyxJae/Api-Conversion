@@ -291,7 +291,9 @@ async def dashboard(request: Request):
                                 <div class="password-field-container">
                                     <input type="password" id="api_key" name="api_key" required>
                                     <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('api_key')" title="显示">
-                                        <span class="icon" id="api_key_icon">○○</span>
+                                        <span class="icon" id="api_key_icon">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                        </span>
                                     </button>
                                 </div>
                             </div>
@@ -346,7 +348,9 @@ async def dashboard(request: Request):
                                     <div class="password-field-container">
                                         <input type="password" id="proxy_password" name="proxy_password" placeholder="如果需要认证则填写">
                                         <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('proxy_password')" title="显示">
-                                            <span class="icon" id="proxy_password_icon">○○</span>
+                                            <span class="icon" id="proxy_password_icon">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                            </span>
                                         </button>
                                     </div>
                                 </div>
@@ -447,7 +451,14 @@ async def dashboard(request: Request):
 
                         <div class="form-group">
                             <label for="detection_api_key">API密钥:</label>
-                            <input type="password" id="detection_api_key" name="api_key" required>
+                            <div class="password-field-container">
+                                <input type="password" id="detection_api_key" name="api_key" required>
+                                <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('detection_api_key')" title="显示">
+                                    <span class="icon" id="detection_api_key_icon">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    </span>
+                                </button>
+                            </div>
                         </div>
 
                         <div class="form-group">
@@ -571,7 +582,7 @@ async def dashboard(request: Request):
                     <form id="adminAPIKeyForm" class="password-form">
                         <div class="form-group">
                             <label for="currentAPIKey">当前API Key:</label>
-                            <input type="text" id="currentAPIKey" readonly style="background-color: #f5f5f5;">
+                            <input type="text" id="currentAPIKey" readonly>
                             <small class="form-hint">当前设置的管理员API Key</small>
                         </div>
                         <div class="form-group">
