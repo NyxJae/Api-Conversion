@@ -18,6 +18,8 @@ from utils.security import mask_api_key, safe_log_request, safe_log_response
 from src.utils.logger import setup_logger
 from src.utils.exceptions import ChannelNotFoundError, ConversionError, APIError, TimeoutError
 from src.utils.http_client import get_http_client
+from src.utils.auth import UserAuth
+from src.utils.channel_selector import channel_selector
 
 logger = setup_logger("unified_api")
 
@@ -829,7 +831,7 @@ def handle_non_streaming_response(response, channel, request_data, source_format
 @router.post("/v1/chat/completions")
 async def unified_openai_format_endpoint(
     request: Request,
-    api_key: str = Depends(extract_openai_api_key)
+    api_key: str = UserAuth
 ):
     """OpenAI格式统一端点（使用标准OpenAI认证）"""
     return await handle_unified_request(request, api_key, source_format="openai")
@@ -839,59 +841,71 @@ async def unified_openai_format_endpoint(
 @router.post("/v1/responses")
 async def unified_openai_responses_endpoint(
     request: Request,
-    api_key: str = Depends(extract_openai_api_key)
+    api_key: str = UserAuth
 ):
     """OpenAI Responses格式统一端点（使用标准OpenAI认证）"""
     return await handle_unified_request(request, api_key, source_format="responses")
 
 
-# 统一的模型列表端点：根据认证方式自动识别格式
+# 统一的模型列表端点：返回所有可用的模型
 @router.get("/v1/models")
 async def list_models_unified(
     request: Request,
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None, alias="x-api-key")
+    api_key: str = UserAuth
 ):
-    """统一的模型列表端点，根据认证方式自动识别OpenAI、Anthropic或Responses格式"""
+    """统一的模型列表端点，返回所有渠道支持的模型"""
     try:
-        # 根据认证方式确定格式和API key
-        if authorization and authorization.startswith("Bearer "):
-            # OpenAI格式认证（包括Responses格式）
-            api_key = authorization[7:]
-            target_format = "openai"  # 默认返回OpenAI格式，Responses格式也使用OpenAI认证
-            logger.info(f"OpenAI format models request with API key: {mask_api_key(api_key)}")
-        elif x_api_key:
+        logger.info(f"Models request with API key: {mask_api_key(api_key)}")
+        
+        # 获取所有可用的模型
+        available_models = channel_selector.get_available_models()
+        
+        # 根据认证方式确定格式
+        authorization = request.headers.get("authorization", "")
+        x_api_key = request.headers.get("x-api-key", "")
+        
+        if x_api_key:
             # Anthropic格式认证
-            api_key = x_api_key
             target_format = "anthropic"
-            logger.info(f"Anthropic format models request with API key: {mask_api_key(api_key)}")
+            logger.info("Returning models in Anthropic format")
         else:
-            raise HTTPException(status_code=401, detail="Missing authorization header")
-
-        channel = channel_manager.get_channel_by_custom_key(api_key)
-        if not channel:
-            logger.error(f"No channel found for API key: {mask_api_key(api_key)}")
-            raise HTTPException(status_code=401, detail="Invalid API key")
-
-        logger.info(f"Found channel: {channel.name} (provider: {channel.provider})")
-
-        # 从目标渠道获取真实的模型列表，转换为指定格式
-        models = await fetch_models_from_channel_for_format(channel, target_format)
-
-        logger.info(f"Returning {len(models)} {target_format} format models")
-
+            # OpenAI格式认证（默认）
+            target_format = "openai"
+            logger.info("Returning models in OpenAI format")
+        
+        # 构建模型列表
+        all_models = []
+        for provider, models in available_models.items():
+            for model in models:
+                if target_format == "openai":
+                    all_models.append({
+                        "id": model,
+                        "object": "model",
+                        "created": int(time.time()),
+                        "owned_by": provider
+                    })
+                else:  # anthropic
+                    all_models.append({
+                        "type": "model",
+                        "id": model,
+                        "display_name": model,
+                        "created_at": datetime.now().isoformat() + "Z",
+                    })
+        
+        logger.info(f"Returning {len(all_models)} models in {target_format} format")
+        
         # 根据格式返回不同的响应结构
         if target_format == "openai":
             return {
                 "object": "list",
-                "data": models
+                "data": all_models
             }
         else:  # anthropic
             return {
-                "data": models,
+                "data": all_models,
                 "has_more": False,
-                "first_id": models[0]["id"] if models else None,
-                "last_id": models[-1]["id"] if models else None
+                "first_id": all_models[0]["id"] if all_models else None,
+                "last_id": all_models[-1]["id"] if all_models else None
             }
 
     except HTTPException:
@@ -905,25 +919,26 @@ async def list_models_unified(
 
 # Gemini格式：列出可用模型  
 @router.get("/v1beta/models")
-async def list_gemini_models(api_key: str = Depends(extract_gemini_api_key)):
+async def list_gemini_models(api_key: str = UserAuth):
     """Gemini格式：列出可用模型"""
     try:
         logger.info(f"Gemini format models request with API key: {mask_api_key(api_key)}")
         
-        channel = channel_manager.get_channel_by_custom_key(api_key)
-        if not channel:
-            logger.error(f"No channel found for API key: {mask_api_key(api_key)}")
-            raise HTTPException(status_code=401, detail="Invalid API key")
+        # 获取所有可用的模型
+        available_models = channel_selector.get_available_models()
         
-        logger.info(f"Found channel: {channel.name} (provider: {channel.provider})")
+        # 构建Gemini格式的模型列表
+        gemini_models = []
+        for provider, models in available_models.items():
+            for model in models:
+                gemini_models.append({
+                    "name": f"models/{model}"
+                })
         
-        # 从目标渠道获取真实的模型列表，转换为Gemini格式
-        models = await fetch_models_from_channel_for_format(channel, "gemini")
-        
-        logger.info(f"Returning {len(models)} Gemini format models")
+        logger.info(f"Returning {len(gemini_models)} Gemini format models")
         
         return {
-            "models": models
+            "models": gemini_models
         }
         
     except HTTPException:
@@ -939,7 +954,7 @@ async def list_gemini_models(api_key: str = Depends(extract_gemini_api_key)):
 @router.post("/v1/messages")
 async def unified_anthropic_format_endpoint(
     request: Request,
-    api_key: str = Depends(extract_anthropic_api_key)
+    api_key: str = UserAuth
 ):
     """Anthropic格式统一端点（使用标准Anthropic认证）"""
     return await handle_unified_request(request, api_key, source_format="anthropic")
@@ -950,7 +965,7 @@ async def unified_anthropic_format_endpoint(
 async def unified_gemini_format_endpoint(
     request: Request,
     model_id: str,
-    api_key: str = Depends(extract_gemini_api_key)
+    api_key: str = UserAuth
 ):
     """Gemini格式统一端点（使用标准Gemini认证）"""
     # 检测是否为流式请求 (Gemini API特有的流式检测方式)
@@ -1001,7 +1016,7 @@ async def unified_gemini_format_endpoint(
 async def unified_gemini_count_tokens_endpoint(
     request: Request,
     model_id: str,
-    api_key: str = Depends(extract_gemini_api_key)
+    api_key: str = UserAuth
 ):
     """Gemini格式countTokens端点（用于计算token数量）"""
     logger.info(f"Gemini countTokens request for model: {model_id}")
@@ -1016,17 +1031,21 @@ async def unified_gemini_count_tokens_endpoint(
         # 获取请求数据
         request_data = await request.json()
         
-        # 对于countTokens，只需要contents字段
-        # 应用模型映射（如果配置）
-        logger.debug(f"Looking for channel with custom_key: {mask_api_key(api_key)}")
-        channel = channel_manager.get_channel_by_custom_key(api_key)
+        # 使用渠道选择器选择合适的渠道
+        channel = channel_selector.select_channel(clean_model_id)
         if not channel:
-            logger.error(f"No available channel found for API key: {mask_api_key(api_key)}")
-            # 列出所有可用的渠道用于调试
-            all_channels = channel_manager.get_all_channels()
-            logger.info(f"Available channels: {[(ch.custom_key, ch.provider) for ch in all_channels]}")
-            raise HTTPException(status_code=503, detail="No available channels")
+            logger.error(f"No available channel supports model: {clean_model_id}")
+            available_models = channel_selector.get_available_models()
+            all_available = []
+            for provider, models in available_models.items():
+                all_available.extend(models)
+            
+            raise HTTPException(
+                status_code=503, 
+                detail=f"No available channels support model '{clean_model_id}'. Available models: {', '.join(sorted(all_available))}"
+            )
 
+        # 应用模型映射
         effective_model_id = clean_model_id
         if channel.models_mapping:
             effective_model_id = channel.models_mapping.get(clean_model_id, clean_model_id)
@@ -1039,8 +1058,7 @@ async def unified_gemini_count_tokens_endpoint(
         }
         
         logger.debug(f"Count tokens request data: {safe_log_request(count_request_data)}")
-        
-        logger.info(f"Found channel: {channel.name} (provider: {channel.provider}, custom_key: {channel.custom_key})")
+        logger.info(f"Found channel: {channel.name} (provider: {channel.provider})")
         
         # 根据渠道provider类型处理countTokens请求
         if channel.provider == "gemini":
@@ -1068,18 +1086,15 @@ async def handle_unified_request(request, api_key: str, source_format: str):
     try:
         logger.debug(f"Processing request: source_format={source_format}, api_key={mask_api_key(api_key)}")
         
-        # 1. 根据key识别目标渠道
-        channel = channel_manager.get_channel_by_custom_key(api_key)
-        if not channel:
-            logger.error(f"No channel found for api_key: {mask_api_key(api_key)}")
-            raise HTTPException(status_code=401, detail="Invalid API key")
-        
-        # 2. 获取请求数据
+        # 1. 获取请求数据
         request_data = await request.json()
 
-        # 3. 验证必须字段
+        # 2. 验证必须字段
         if not request_data.get("model"):
             raise HTTPException(status_code=400, detail="Model name is required")
+        
+        model_name = request_data.get("model")
+        logger.info(f"Request for model: {model_name}")
         
         # Anthropic格式需要max_tokens字段
         if source_format == "anthropic" and not request_data.get("max_tokens"):
@@ -1090,7 +1105,22 @@ async def handle_unified_request(request, api_key: str, source_format: str):
             if not request_data.get("input"):
                 raise HTTPException(status_code=400, detail="input is required for Responses format")
         
-        logger.debug(f"Unified API: source_format={source_format}, key={mask_api_key(api_key)}, target_provider={channel.provider}")
+        # 3. 使用渠道选择器选择合适的渠道
+        channel = channel_selector.select_channel(model_name)
+        if not channel:
+            logger.error(f"No available channel supports model: {model_name}")
+            # 提供详细的错误信息
+            available_models = channel_selector.get_available_models()
+            all_available = []
+            for provider, models in available_models.items():
+                all_available.extend(models)
+            
+            raise HTTPException(
+                status_code=503, 
+                detail=f"No available channels support model '{model_name}'. Available models: {', '.join(sorted(all_available))}"
+            )
+        
+        logger.debug(f"Unified API: source_format={source_format}, model={model_name}, selected_channel={channel.name} (provider: {channel.provider})")
         logger.debug(f"Request stream parameter: {request_data.get('stream', False)}")
         
         # 4. 根据流式参数选择处理方式

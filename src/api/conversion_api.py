@@ -17,6 +17,7 @@ from formats.converter_factory import ConverterFactory, convert_request, convert
 from src.utils.logger import setup_logger
 from src.utils.exceptions import ChannelNotFoundError, ConversionError, APIError, TimeoutError
 from src.utils.http_client import get_http_client
+from src.utils.auth import AdminAuth
 
 logger = setup_logger("conversion_api")
 
@@ -36,11 +37,12 @@ class ChannelCreateRequest(BaseModel):
     provider: str = Field(..., description="提供商 (openai/anthropic/gemini)")
     base_url: str = Field(..., description="API基础URL")
     api_key: str = Field(..., description="API密钥")
-    custom_key: str = Field(..., description="自定义key，用户调用时使用")
     timeout: int = Field(30, description="超时时间")
     max_retries: int = Field(3, description="最大重试次数")
-    # 新增：模型映射（请求模型名 -> 映射模型名）
-    models_mapping: Optional[Dict[str, str]] = None
+    # 必填：权重和模型映射
+    weight: int = Field(1, description="渠道权重，用于负载均衡", ge=1)
+    models_mapping: Dict[str, str] = Field(..., description="模型映射（请求模型名 -> 映射模型名）")
+    # 代理配置
     use_proxy: Optional[bool] = None
     proxy_type: Optional[str] = None
     proxy_host: Optional[str] = None
@@ -54,10 +56,10 @@ class ChannelUpdateRequest(BaseModel):
     name: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
-    custom_key: Optional[str] = None
     timeout: Optional[int] = None
     max_retries: Optional[int] = None
     enabled: Optional[bool] = None
+    weight: Optional[int] = Field(None, description="渠道权重，用于负载均衡", ge=1)
     models_mapping: Optional[Dict[str, str]] = None
     use_proxy: Optional[bool] = None
     proxy_type: Optional[str] = None
@@ -157,7 +159,7 @@ async def forward_request(
 
 # 渠道管理API
 @router.post("/channels")
-async def create_channel(request: ChannelCreateRequest, _: bool = Depends(get_session_user)):
+async def create_channel(request: ChannelCreateRequest, _: str = AdminAuth):
     """创建新渠道"""
     
     try:
@@ -166,10 +168,10 @@ async def create_channel(request: ChannelCreateRequest, _: bool = Depends(get_se
             provider=request.provider,
             base_url=request.base_url,
             api_key=request.api_key,
-            custom_key=request.custom_key,
+            weight=request.weight,
+            models_mapping=request.models_mapping,
             timeout=request.timeout,
             max_retries=request.max_retries,
-            models_mapping=request.models_mapping,
             use_proxy=request.use_proxy,
             proxy_type=request.proxy_type,
             proxy_host=request.proxy_host,
@@ -189,34 +191,34 @@ async def create_channel(request: ChannelCreateRequest, _: bool = Depends(get_se
 
 
 @router.get("/channels")
-async def list_channels(_: bool = Depends(get_session_user)):
+async def list_channels(_: str = AdminAuth):
     """获取所有渠道"""
     try:
         channels = channel_manager.get_all_channels()
         return {
             "success": True,
             "channels": [
-                {
-                    "id": channel.id,
-                    "name": channel.name,
-                    "provider": channel.provider,
-                    "base_url": channel.base_url,
-                    "api_key": "***" if channel.api_key else None,
-                    "custom_key": channel.custom_key,
-                    "timeout": getattr(channel, 'timeout', 30),
-                    "max_retries": getattr(channel, 'max_retries', 3),
-                    "enabled": channel.enabled,
-                    "models_mapping": getattr(channel, 'models_mapping', None),
-                    # 代理配置
-                    "proxy_host": getattr(channel, 'proxy_host', None),
-                    "proxy_port": getattr(channel, 'proxy_port', None),
-                    "proxy_type": getattr(channel, 'proxy_type', None),
-                    "proxy_username": getattr(channel, 'proxy_username', None),
-                    "proxy_password": "***" if getattr(channel, 'proxy_password', None) else None,
-                    # 时间戳
-                    "created_at": channel.created_at,
-                    "updated_at": channel.updated_at
-                }
+{
+                "id": channel.id,
+                "name": channel.name,
+                "provider": channel.provider,
+                "base_url": channel.base_url,
+                "api_key": "***" if channel.api_key else None,
+                "weight": getattr(channel, 'weight', 1),
+                "timeout": getattr(channel, 'timeout', 30),
+                "max_retries": getattr(channel, 'max_retries', 3),
+                "enabled": channel.enabled,
+                "models_mapping": getattr(channel, 'models_mapping', None),
+                # 代理配置
+                "proxy_host": getattr(channel, 'proxy_host', None),
+                "proxy_port": getattr(channel, 'proxy_port', None),
+                "proxy_type": getattr(channel, 'proxy_type', None),
+                "proxy_username": getattr(channel, 'proxy_username', None),
+                "proxy_password": "***" if getattr(channel, 'proxy_password', None) else None,
+                # 时间戳
+                "created_at": channel.created_at,
+                "updated_at": channel.updated_at
+            }
                 for channel in channels
             ]
         }
@@ -226,7 +228,7 @@ async def list_channels(_: bool = Depends(get_session_user)):
 
 
 @router.get("/channels/{channel_id}")
-async def get_channel(channel_id: str, _: bool = Depends(get_session_user)):
+async def get_channel(channel_id: str, _: str = AdminAuth):
     """获取特定渠道信息"""
     try:
         channel = channel_manager.get_channel(channel_id)
@@ -234,14 +236,13 @@ async def get_channel(channel_id: str, _: bool = Depends(get_session_user)):
             raise HTTPException(status_code=404, detail="Channel not found")
         
         return {
-            "success": True,
             "channel": {
                 "id": channel.id,
                 "name": channel.name,
                 "provider": channel.provider,
                 "base_url": channel.base_url,
                 "api_key": "***" if channel.api_key else None,
-                "custom_key": channel.custom_key,
+                "weight": getattr(channel, 'weight', 1),
                 "timeout": getattr(channel, 'timeout', 30),
                 "max_retries": getattr(channel, 'max_retries', 3),
                 "enabled": channel.enabled,
@@ -265,7 +266,7 @@ async def get_channel(channel_id: str, _: bool = Depends(get_session_user)):
 
 
 @router.put("/channels/{channel_id}")
-async def update_channel(channel_id: str, request: ChannelUpdateRequest, _: bool = Depends(get_session_user)):
+async def update_channel(channel_id: str, request: ChannelUpdateRequest, _: str = AdminAuth):
     """更新渠道信息"""
     try:
         success = channel_manager.update_channel(
@@ -273,7 +274,7 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest, _: bool
             name=request.name,
             base_url=request.base_url,
             api_key=request.api_key,
-            custom_key=request.custom_key,
+            weight=request.weight,
             timeout=request.timeout,
             max_retries=request.max_retries,
             enabled=request.enabled,
@@ -302,7 +303,7 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest, _: bool
 
 
 @router.delete("/channels/{channel_id}")
-async def delete_channel(channel_id: str, _: bool = Depends(get_session_user)):
+async def delete_channel(channel_id: str, _: str = AdminAuth):
     """删除渠道"""
     try:
         success = channel_manager.delete_channel(channel_id)
@@ -322,7 +323,7 @@ async def delete_channel(channel_id: str, _: bool = Depends(get_session_user)):
 
 
 @router.get("/channels/{channel_id}/test")
-async def test_channel(channel_id: str, _: bool = Depends(get_session_user)):
+async def test_channel(channel_id: str, _: str = AdminAuth):
     """测试渠道连接"""
     try:
         result = channel_manager.test_channel_connection(channel_id)
@@ -528,7 +529,7 @@ async def probe_one_url(client: httpx.AsyncClient, url: str) -> Dict[str, Any]:
 
 
 @router.post("/test_proxy")
-async def test_proxy_connection(request: ProxyTestRequest, _: bool = Depends(get_session_user)):
+async def test_proxy_connection(request: ProxyTestRequest, _: str = AdminAuth):
     """测试代理连通性 - 优化版本：并发测试，减少耦合，细化错误处理"""
     
     # 预检查SOCKS5支持

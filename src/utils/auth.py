@@ -1,11 +1,15 @@
 """
 认证和授权管理
+提供会话认证和管理员API Key认证功能
 """
 import hashlib
 import secrets
 import os
 from typing import Optional
 from datetime import datetime, timedelta
+
+from fastapi import HTTPException, Header, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from src.utils.database import db_manager
 from src.utils.logger import setup_logger
@@ -186,6 +190,109 @@ class AuthManager:
         except Exception as e:
             logger.error(f"Session cleanup failed: {e}")
             return 0
+
+
+# 管理员API Key配置
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+if not ADMIN_API_KEY:
+    logger.warning("ADMIN_API_KEY environment variable not set. Admin authentication will be disabled.")
+    ADMIN_API_KEY = "admin-default-key-change-in-production"  # 默认密钥，仅用于开发
+
+# HTTP Bearer认证
+security = HTTPBearer(auto_error=False)
+
+
+def get_admin_api_key(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_admin_api_key: Optional[str] = Header(None, alias="x-admin-api-key")
+) -> str:
+    """
+    获取管理员API Key，支持多种认证方式：
+    1. Authorization Bearer header
+    2. x-admin-api-key header
+    """
+    # 优先使用 x-admin-api-key header
+    if x_admin_api_key:
+        logger.debug("Admin auth via x-admin-api-key header")
+        api_key = x_admin_api_key
+    # 然后尝试 Authorization Bearer header
+    elif credentials and credentials.scheme == "Bearer":
+        logger.debug("Admin auth via Authorization Bearer header")
+        api_key = credentials.credentials
+    else:
+        logger.error("Missing admin authentication")
+        raise HTTPException(
+            status_code=401,
+            detail="Missing admin API key. Provide it via 'x-admin-api-key' header or 'Authorization: Bearer <key>' header."
+        )
+    
+    # 从数据库获取当前设置的管理员API Key
+    stored_admin_key = db_manager.get_config("admin_api_key")
+    
+    # 如果数据库中没有设置，使用环境变量或默认值
+    if not stored_admin_key:
+        stored_admin_key = ADMIN_API_KEY
+        logger.warning("No admin API key set in database, using fallback")
+    
+    # 验证API Key
+    if api_key != stored_admin_key:
+        logger.error("Invalid admin API key provided")
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid admin API key"
+        )
+    
+    logger.debug("Admin authentication successful")
+    return api_key
+
+
+def get_user_api_key(
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+    authorization_gemini: Optional[str] = Header(None, alias="authorization")
+) -> str:
+    """
+    获取用户API Key，支持多种API格式：
+    - OpenAI格式: Authorization: Bearer <key>
+    - Anthropic格式: x-api-key: <key>
+    - Gemini格式: Authorization: Bearer <key> 或 x-goog-api-key: <key>
+    """
+    # OpenAI格式
+    if authorization and authorization.startswith("Bearer "):
+        logger.debug("User auth via OpenAI Bearer format")
+        return authorization[7:]
+    
+    # Anthropic格式
+    if x_api_key:
+        logger.debug("User auth via Anthropic x-api-key format")
+        return x_api_key
+    
+    # Gemini格式（也使用Bearer，但可能在不同的header中）
+    if authorization_gemini and authorization_gemini.startswith("Bearer "):
+        logger.debug("User auth via Gemini Bearer format")
+        return authorization_gemini[7:]
+    
+    logger.error("Missing user API key")
+    raise HTTPException(
+        status_code=401,
+        detail="Missing API key. Please provide your API key using the appropriate format for your AI service provider."
+    )
+
+
+def mask_api_key(api_key: str) -> str:
+    """遮蔽API Key用于日志记录"""
+    if not api_key:
+        return "None"
+    
+    if len(api_key) <= 8:
+        return "***"
+    
+    return f"{api_key[:4]}...{api_key[-4:]}"
+
+
+# 认证依赖项
+AdminAuth = Depends(get_admin_api_key)
+UserAuth = Depends(get_user_api_key)
 
 
 # 全局认证管理器实例

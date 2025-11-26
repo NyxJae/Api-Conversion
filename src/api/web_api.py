@@ -249,6 +249,7 @@ async def dashboard(request: Request):
             <div class="header-bar">
                 <h1>AI API FORMAT CONVERSION</h1>
                 <div class="header-actions">
+                    <button onclick="showAdminAPIKeyModal()" class="btn-tertiary">API Key设置</button>
                     <button onclick="showChangePasswordModal()" class="btn-tertiary">修改密码</button>
                     <button onclick="logout()" class="btn-secondary">注销</button>
                 </div>
@@ -295,11 +296,11 @@ async def dashboard(request: Request):
                                 </div>
                             </div>
                         </div>
-                        <div class="form-row">
+<div class="form-row">
                             <div class="form-group">
-                                <label for="custom_key">自定义Key:</label>
-                                <input type="text" id="custom_key" name="custom_key" placeholder="用户调用时使用的key，例如：my-key-123" required>
-                                <small class="form-hint">用户调用API时使用此key进行身份验证</small>
+                                <label for="weight">权重:</label>
+                                <input type="number" id="weight" name="weight" value="100" min="0" max="1000" required>
+                                <small class="form-hint">渠道权重，范围0-1000，用于负载均衡时分配请求</small>
                             </div>
                             <div class="proxy-toggle-container" id="proxyToggleContainer">
                                 <input type="checkbox" id="use_proxy" name="use_proxy" onchange="toggleProxyFields()">
@@ -559,6 +560,33 @@ async def dashboard(request: Request):
                     <div id="password-message" class="message" style="display: none;"></div>
                 </div>
             </div>
+
+            <!-- 管理员API Key设置模态框 -->
+            <div id="adminAPIKeyModal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>管理员API Key设置</h3>
+                        <button type="button" class="modal-close" onclick="hideAdminAPIKeyModal()">&times;</button>
+                    </div>
+                    <form id="adminAPIKeyForm" class="password-form">
+                        <div class="form-group">
+                            <label for="currentAPIKey">当前API Key:</label>
+                            <input type="text" id="currentAPIKey" readonly style="background-color: #f5f5f5;">
+                            <small class="form-hint">当前设置的管理员API Key</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="newAPIKey">新的API Key:</label>
+                            <input type="text" id="newAPIKey" name="api_key" required minlength="4" placeholder="请输入新的管理员API Key">
+                            <small class="form-hint">API Key长度不少于4位，用于管理API的认证</small>
+                        </div>
+                        <div class="modal-actions">
+                            <button type="button" class="btn-secondary" onclick="hideAdminAPIKeyModal()">取消</button>
+                            <button type="submit" class="btn-primary">设置API Key</button>
+                        </div>
+                    </form>
+                    <div id="apikey-message" class="message" style="display: none;"></div>
+                </div>
+            </div>
         </div>
 
         <script>
@@ -703,6 +731,114 @@ async def dashboard(request: Request):
                 }
             }
 
+            // 管理员API Key设置相关函数
+            async function loadCurrentAPIKey() {
+                try {
+                    const response = await fetch('/api/admin/api-key');
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        const currentKeyInput = document.getElementById('currentAPIKey');
+                        if (result.is_set && result.api_key) {
+                            currentKeyInput.value = result.api_key;
+                        } else {
+                            currentKeyInput.value = '未设置';
+                        }
+                    } else {
+                        document.getElementById('currentAPIKey').value = '加载失败';
+                    }
+                } catch (error) {
+                    console.error('加载API Key失败:', error);
+                    document.getElementById('currentAPIKey').value = '加载失败';
+                }
+            }
+
+            // 显示管理员API Key设置模态框
+            function showAdminAPIKeyModal() {
+                const modal = document.getElementById('adminAPIKeyModal');
+                modal.style.display = 'flex';
+                
+                // 加载当前API Key
+                loadCurrentAPIKey();
+                
+                // 清空新API Key输入框和消息
+                document.getElementById('newAPIKey').value = '';
+                const messageDiv = document.getElementById('apikey-message');
+                messageDiv.style.display = 'none';
+                
+                // 聚焦到新API Key输入框
+                document.getElementById('newAPIKey').focus();
+            }
+
+            // 隐藏管理员API Key设置模态框
+            function hideAdminAPIKeyModal() {
+                const modal = document.getElementById('adminAPIKeyModal');
+                modal.style.display = 'none';
+            }
+
+            // 设置管理员API Key
+            async function setAdminAPIKey(event) {
+                event.preventDefault();
+                
+                const newAPIKey = document.getElementById('newAPIKey').value.trim();
+                
+                if (!newAPIKey) {
+                    showAPIKeyMessage('API Key不能为空', 'error');
+                    return;
+                }
+                
+                if (newAPIKey.length < 4) {
+                    showAPIKeyMessage('API Key长度不能少于4位', 'error');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch('/api/admin/api-key', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            api_key: newAPIKey
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        showAPIKeyMessage(result.message, 'success');
+                        // 清空表单
+                        document.getElementById('adminAPIKeyForm').reset();
+                        // 重新加载当前API Key显示
+                        await loadCurrentAPIKey();
+                        
+                        // 2秒后关闭模态框
+                        setTimeout(() => {
+                            hideAdminAPIKeyModal();
+                        }, 2000);
+                    } else {
+                        showAPIKeyMessage(result.message, 'error');
+                    }
+                } catch (error) {
+                    console.error('设置API Key失败:', error);
+                    showAPIKeyMessage('设置API Key失败，请稍后重试', 'error');
+                }
+            }
+
+            function showAPIKeyMessage(message, type) {
+                const messageDiv = document.getElementById('apikey-message');
+                messageDiv.textContent = message;
+                messageDiv.className = `message ${type}`;
+                messageDiv.style.display = 'block';
+                
+                // 3秒后自动隐藏消息（除非是成功消息）
+                if (type !== 'success') {
+                    setTimeout(() => {
+                        messageDiv.style.display = 'none';
+                    }, 3000);
+                }
+            }
+
             // 页面加载时初始化
             document.addEventListener('DOMContentLoaded', function() {
                 console.log('Dashboard loaded, user authenticated by server');
@@ -724,6 +860,12 @@ async def dashboard(request: Request):
                 const changePasswordForm = document.getElementById('changePasswordForm');
                 if (changePasswordForm) {
                     changePasswordForm.addEventListener('submit', changePassword);
+                }
+                
+                // 绑定管理员API Key表单事件
+                const adminAPIKeyForm = document.getElementById('adminAPIKeyForm');
+                if (adminAPIKeyForm) {
+                    adminAPIKeyForm.addEventListener('submit', setAdminAPIKey);
                 }
             });
         </script>
@@ -862,6 +1004,66 @@ async def get_providers():
             }
         ]
     }
+
+
+class AdminAPIKeyRequest(BaseModel):
+    """管理员API Key设置请求"""
+    api_key: str
+
+
+@app.get("/api/admin/api-key")
+async def get_admin_api_key():
+    """获取当前管理员API Key"""
+    try:
+        from src.utils.database import db_manager
+        current_key = db_manager.get_config("admin_api_key")
+        
+        return {
+            "success": True,
+            "api_key": current_key,
+            "is_set": bool(current_key)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get admin API key: {e}")
+        return JSONResponse(
+            content={
+                "success": False,
+                "message": "获取管理员API Key失败"
+            },
+            status_code=500
+        )
+
+
+@app.post("/api/admin/api-key")
+async def set_admin_api_key(request: AdminAPIKeyRequest):
+    """设置管理员API Key"""
+    if not request.api_key or len(request.api_key.strip()) < 4:
+        return JSONResponse(
+            content={
+                "success": False,
+                "message": "API Key长度不能少于4位"
+            },
+            status_code=400
+        )
+    
+    try:
+        from src.utils.database import db_manager
+        db_manager.set_config("admin_api_key", request.api_key.strip())
+        
+        logger.info("Admin API key updated successfully")
+        return {
+            "success": True,
+            "message": "管理员API Key设置成功"
+        }
+    except Exception as e:
+        logger.error(f"Failed to set admin API key: {e}")
+        return JSONResponse(
+            content={
+                "success": False,
+                "message": "设置管理员API Key失败"
+            },
+            status_code=500
+        )
 
 
 # 注意：获取渠道列表API已统一到 conversion_api.py 中

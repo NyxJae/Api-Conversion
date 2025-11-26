@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from src.utils.logger import setup_logger
-from src.utils.exceptions import ChannelNotFoundError, ConfigurationError
+from src.utils.exceptions import ChannelNotFoundError
 from src.utils.database import db_manager
 
 logger = setup_logger("channel_manager")
@@ -16,16 +16,19 @@ logger = setup_logger("channel_manager")
 @dataclass
 class ChannelInfo:
     """渠道信息"""
+    # 必需字段（无默认值）
     id: str
     name: str
     provider: str  # openai, anthropic, gemini
     base_url: str
     api_key: str
-    custom_key: str  # 用户自定义的key，用于调用此渠道
+    models_mapping: Optional[Dict[str, str]] = None  # 模型映射，设为可选但会在__post_init__中验证
+    
+    # 可选字段（有默认值）
+    weight: int = 1  # 渠道权重，用于负载均衡
     timeout: int = 30
     max_retries: int = 3
     enabled: bool = True
-    models_mapping: Optional[Dict[str, str]] = None
     # 代理配置
     use_proxy: bool = False
     proxy_type: Optional[str] = None  # http, https, socks5
@@ -37,6 +40,17 @@ class ChannelInfo:
     updated_at: str = ""
 
     def __post_init__(self):
+        # 验证 models_mapping 是否为必填字段
+        if self.models_mapping is None:
+            raise ValueError("models_mapping is required and cannot be None")
+        
+        if not self.models_mapping:
+            raise ValueError("models_mapping cannot be empty")
+        
+        if not isinstance(self.models_mapping, dict):
+            raise ValueError("models_mapping must be a dictionary")
+        
+        # 设置时间戳
         if not self.created_at:
             self.created_at = datetime.now().isoformat()
         self.updated_at = datetime.now().isoformat()
@@ -59,10 +73,10 @@ class ChannelManager:
         provider: str,
         base_url: str,
         api_key: str,
-        custom_key: str,
+        models_mapping: Dict[str, str],
+        weight: int = 1,
         timeout: int = 30,
         max_retries: int = 3,
-        models_mapping: Optional[Dict[str, str]] = None,
         use_proxy: bool = False,
         proxy_type: Optional[str] = None,
         proxy_host: Optional[str] = None,
@@ -73,13 +87,19 @@ class ChannelManager:
         """添加新渠道"""
         if provider not in ['openai', 'anthropic', 'gemini']:
             raise ValueError(f"Unsupported provider: {provider}")
+        
+        if not models_mapping:
+            raise ValueError("models_mapping is required")
+        
+        if weight < 1:
+            raise ValueError("weight must be at least 1")
 
         return db_manager.add_channel(
             name=name,
             provider=provider,
             base_url=base_url,
             api_key=api_key,
-            custom_key=custom_key,
+            weight=weight,
             timeout=timeout,
             max_retries=max_retries,
             models_mapping=models_mapping,
@@ -97,7 +117,7 @@ class ChannelManager:
         name: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
-        custom_key: Optional[str] = None,
+        weight: Optional[int] = None,
         timeout: Optional[int] = None,
         max_retries: Optional[int] = None,
         enabled: Optional[bool] = None,
@@ -110,12 +130,15 @@ class ChannelManager:
         proxy_password: Optional[str] = None
     ) -> bool:
         """更新渠道信息"""
+        if weight is not None and weight < 1:
+            raise ValueError("weight must be at least 1")
+        
         success = db_manager.update_channel(
             channel_id=channel_id,
             name=name,
             base_url=base_url,
             api_key=api_key,
-            custom_key=custom_key,
+            weight=weight,
             timeout=timeout,
             max_retries=max_retries,
             enabled=enabled,
@@ -139,20 +162,12 @@ class ChannelManager:
         if not success:
             raise ChannelNotFoundError(f"Channel not found: {channel_id}")
         return True
-
     def get_channel(self, channel_id: str) -> Optional[ChannelInfo]:
         """获取渠道信息"""
         data = db_manager.get_channel(channel_id)
         return ChannelInfo.from_dict(data) if data else None
 
-    def get_channel_by_custom_key(self, custom_key: str) -> Optional[ChannelInfo]:
-        """根据自定义key获取渠道信息"""
-        data = db_manager.get_channel_by_custom_key(custom_key)
-        return ChannelInfo.from_dict(data) if data else None
-
     def get_channels_by_provider(self, provider: str) -> List[ChannelInfo]:
-        """按提供商获取渠道列表"""
-        channels_data = db_manager.get_channels_by_provider(provider)
         return [ChannelInfo.from_dict(data) for data in channels_data]
 
     def get_all_channels(self) -> List[ChannelInfo]:

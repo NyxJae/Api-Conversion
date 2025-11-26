@@ -7,7 +7,7 @@ import pymysql
 import os
 import json
 import uuid
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -48,95 +48,36 @@ class DatabaseManager:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
     def _get_raw_connection(self):
-        """获取原始数据库连接（不检查初始化状态）"""
+        """获取原始数据库连接"""
         if self.db_type == "sqlite":
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            return conn
+            return sqlite3.connect(self.db_path)
         elif self.db_type == "mysql":
-            connect_params = {
-                'host': env_config.mysql_host,
-                'port': env_config.mysql_port,
-                'user': env_config.mysql_user,
-                'password': env_config.mysql_password,
-                'database': env_config.mysql_database,
-                'charset': 'utf8mb4',
-                'cursorclass': pymysql.cursors.DictCursor,
-                'autocommit': False,
-                'connect_timeout': 5,   # 减少连接超时时间
-                'read_timeout': 10,    # 减少读取超时时间  
-                'write_timeout': 10,   # 减少写入超时时间
-                'ssl_disabled': False  # Enable SSL for cloud databases
-            }
-            
-            if env_config.mysql_socket:
-                connect_params['unix_socket'] = env_config.mysql_socket
-                connect_params.pop('host', None)
-                connect_params.pop('port', None)
-            
-            return pymysql.connect(**connect_params)
+            return pymysql.connect(
+                host=env_config.mysql_host,
+                port=env_config.mysql_port,
+                user=env_config.mysql_user,
+                password=env_config.mysql_password,
+                database=env_config.mysql_database,
+                charset='utf8mb4',
+                autocommit=False
+            )
         else:
             raise ValueError(f"Unsupported database type: {self.db_type}")
-    
-    def _execute_query(self, conn, query: str, params: tuple = None):
-        """执行查询，自动处理SQLite和MySQL的差异"""
-        cursor = conn.cursor()
-        
-        if self.db_type == "mysql":
-            # 将SQLite的?占位符转换为MySQL的%s占位符
-            query = query.replace('?', '%s')
-        
-        if params:
-            cursor.execute(query, params)
-        else:
-            cursor.execute(query)
-        
-        return cursor
     
     @contextmanager
     def get_connection(self):
         """获取数据库连接的上下文管理器"""
-        self._ensure_initialized()
-        
-        if self.db_type == "sqlite":
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row  # 使结果可以通过列名访问
-        elif self.db_type == "mysql":
-            # MySQL连接参数
-            connect_params = {
-                'host': env_config.mysql_host,
-                'port': env_config.mysql_port,
-                'user': env_config.mysql_user,
-                'password': env_config.mysql_password,
-                'database': env_config.mysql_database,
-                'charset': 'utf8mb4',
-                'cursorclass': pymysql.cursors.DictCursor,  # 使结果可以通过列名访问
-                'autocommit': False,
-                'connect_timeout': 5,   # 5秒连接超时
-                'read_timeout': 10,     # 10秒读取超时
-                'write_timeout': 10,    # 10秒写入超时
-                'ssl_disabled': False   # Enable SSL for cloud databases
-            }
-            
-            # 如果配置了socket路径，则使用socket连接
-            if env_config.mysql_socket:
-                connect_params['unix_socket'] = env_config.mysql_socket
-                # 使用socket时不需要host和port
-                connect_params.pop('host', None)
-                connect_params.pop('port', None)
-            
-            conn = pymysql.connect(**connect_params)
-        else:
-            raise ValueError(f"Unsupported database type: {self.db_type}")
-        
+        conn = self._get_raw_connection()
         try:
             yield conn
-        except Exception as e:
-            if hasattr(conn, 'rollback'):
-                conn.rollback()
-            raise e
         finally:
             conn.close()
+    
+    def _execute_query(self, conn, query: str, params: tuple = None):
+        """执行SQL查询"""
+        cursor = conn.cursor()
+        cursor.execute(query, params or ())
+        return cursor
     
     def _init_database(self):
         """初始化数据库表"""
@@ -146,122 +87,128 @@ class DatabaseManager:
             
             if self.db_type == "sqlite":
                 # SQLite表结构
-                cursor.execute('''
+                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS channels (
                         id TEXT PRIMARY KEY,
                         name TEXT NOT NULL,
                         provider TEXT NOT NULL,
                         base_url TEXT NOT NULL,
                         api_key TEXT NOT NULL,
-                        custom_key TEXT UNIQUE NOT NULL,
                         timeout INTEGER DEFAULT 30,
                         max_retries INTEGER DEFAULT 3,
                         enabled BOOLEAN DEFAULT 1,
-                        models_mapping TEXT,
+                        models_mapping TEXT NOT NULL,
                         use_proxy BOOLEAN DEFAULT 0,
                         proxy_type TEXT,
                         proxy_host TEXT,
                         proxy_port INTEGER,
                         proxy_username TEXT,
                         proxy_password TEXT,
+                        weight INTEGER DEFAULT 1,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     )
-                ''')
+                """)
                 
-                cursor.execute('''
+                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS system_config (
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     )
-                ''')
+                """)
                 
             elif self.db_type == "mysql":
                 # MySQL表结构
-                cursor.execute('''
+                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS channels (
                         id VARCHAR(255) PRIMARY KEY,
                         name VARCHAR(255) NOT NULL,
                         provider VARCHAR(100) NOT NULL,
                         base_url TEXT NOT NULL,
                         api_key TEXT NOT NULL,
-                        custom_key VARCHAR(255) UNIQUE NOT NULL,
                         timeout INT DEFAULT 30,
                         max_retries INT DEFAULT 3,
                         enabled TINYINT(1) DEFAULT 1,
-                        models_mapping TEXT,
+                        models_mapping TEXT NOT NULL,
                         use_proxy TINYINT(1) DEFAULT 0,
                         proxy_type VARCHAR(20),
                         proxy_host VARCHAR(255),
                         proxy_port INT,
                         proxy_username VARCHAR(255),
                         proxy_password TEXT,
+                        weight INT DEFAULT 1,
                         created_at DATETIME NOT NULL,
                         updated_at DATETIME NOT NULL
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                ''')
+                """)
                 
-                cursor.execute('''
+                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS system_config (
                         `key` VARCHAR(255) PRIMARY KEY,
                         `value` TEXT NOT NULL,
                         created_at DATETIME NOT NULL,
                         updated_at DATETIME NOT NULL
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                ''')
+                """)
             
             conn.commit()
             
             # 进行数据库迁移 - 添加代理字段（如果不存在）
             self._migrate_proxy_fields(cursor, conn)
             
-            logger.info(f"Database ({self.db_type}) initialized successfully")
+            # 进行数据库迁移 - 添加权重字段（如果不存在）
+            self._migrate_weight_field(cursor, conn)
+            
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+            raise
         finally:
             conn.close()
-
+    
     def _migrate_proxy_fields(self, cursor, conn):
-        """迁移数据库，添加代理字段（如果不存在）"""
+        """迁移代理字段（如果不存在）"""
         try:
-            if self.db_type == "sqlite":
-                # 检查是否已经存在代理字段
-                cursor.execute("PRAGMA table_info(channels)")
-                columns = [row[1] for row in cursor.fetchall()]
-                
-                proxy_fields = ['use_proxy', 'proxy_type', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password']
-                for field in proxy_fields:
-                    if field not in columns:
-                        if field == 'use_proxy':
-                            cursor.execute(f"ALTER TABLE channels ADD COLUMN {field} BOOLEAN DEFAULT 0")
-                        elif field in ['proxy_port']:
-                            cursor.execute(f"ALTER TABLE channels ADD COLUMN {field} INTEGER")
-                        else:
-                            cursor.execute(f"ALTER TABLE channels ADD COLUMN {field} TEXT")
-                        logger.info(f"Added column {field} to channels table")
-                        
-            elif self.db_type == "mysql":
-                # 检查是否已经存在代理字段
-                cursor.execute("SHOW COLUMNS FROM channels")
-                columns = [row['Field'] for row in cursor.fetchall()]
-                
-                proxy_fields = {
-                    'use_proxy': 'TINYINT(1) DEFAULT 0',
-                    'proxy_type': 'VARCHAR(20)',
-                    'proxy_host': 'VARCHAR(255)',
-                    'proxy_port': 'INT',
-                    'proxy_username': 'VARCHAR(255)',
-                    'proxy_password': 'TEXT'
-                }
-                
-                for field, field_type in proxy_fields.items():
-                    if field not in columns:
+            # 检查是否已存在代理字段
+            cursor.execute("PRAGMA table_info(channels)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            proxy_fields = ['use_proxy', 'proxy_type', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password']
+            for field in proxy_fields:
+                if field not in columns:
+                    if self.db_type == "sqlite":
+                        cursor.execute(f"ALTER TABLE channels ADD COLUMN {field} {'TEXT' if field in ['proxy_type', 'proxy_host', 'proxy_username'] else ('INTEGER' if field == 'proxy_port' else 'BOOLEAN')}")
+                    elif self.db_type == "mysql":
+                        field_type = {
+                            'use_proxy': 'TINYINT(1)',
+                            'proxy_type': 'VARCHAR(20)',
+                            'proxy_host': 'VARCHAR(255)',
+                            'proxy_port': 'INT',
+                            'proxy_username': 'VARCHAR(255)',
+                            'proxy_password': 'TEXT'
+                        }[field]
                         cursor.execute(f"ALTER TABLE channels ADD COLUMN {field} {field_type}")
-                        logger.info(f"Added column {field} to channels table")
-                        
+                    logger.info(f"Added {field} column to channels table")
+            
             conn.commit()
         except Exception as e:
             logger.warning(f"Migration warning (proxy fields may already exist): {e}")
+    
+    def _migrate_weight_field(self, cursor, conn):
+        """迁移权重字段（如果不存在）"""
+        try:
+            # 检查是否已存在权重字段
+            cursor.execute("PRAGMA table_info(channels)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'weight' not in columns:
+                cursor.execute("ALTER TABLE channels ADD COLUMN weight INT DEFAULT 1")
+                logger.info("Added weight column to channels table")
+            
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"Migration warning (weight field may already exist): {e}")
     
     def add_channel(
         self,
@@ -269,7 +216,6 @@ class DatabaseManager:
         provider: str,
         base_url: str,
         api_key: str,
-        custom_key: str,
         timeout: int = 30,
         max_retries: int = 3,
         models_mapping: Optional[Dict[str, str]] = None,
@@ -278,13 +224,18 @@ class DatabaseManager:
         proxy_host: Optional[str] = None,
         proxy_port: Optional[int] = None,
         proxy_username: Optional[str] = None,
-        proxy_password: Optional[str] = None
+        proxy_password: Optional[str] = None,
+        weight: int = 1
     ) -> str:
         """添加新渠道"""
         channel_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
         
-        models_mapping_json = json.dumps(models_mapping) if models_mapping else None
+        # 验证models_mapping必填
+        if not models_mapping:
+            raise ValueError("models_mapping is required")
+        
+        models_mapping_json = json.dumps(models_mapping)
         
         # 验证API密钥不是明显的JavaScript错误信息
         if api_key.startswith('script.js:') or 'Uncaught TypeError' in api_key:
@@ -301,24 +252,22 @@ class DatabaseManager:
         
         with self.get_connection() as conn:
             try:
-                cursor = self._execute_query(conn, '''
+                cursor = self._execute_query(conn, """
                     INSERT INTO channels 
-                    (id, name, provider, base_url, api_key, custom_key, timeout, max_retries, 
+                    (id, name, provider, base_url, api_key, timeout, max_retries, 
                      enabled, models_mapping, use_proxy, proxy_type, proxy_host, proxy_port, 
-                     proxy_username, proxy_password, created_at, updated_at)
+                     proxy_username, proxy_password, weight, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    channel_id, name, provider, base_url, encrypted_api_key, custom_key,
+                """, (
+                    channel_id, name, provider, base_url, encrypted_api_key,
                     timeout, max_retries, True, models_mapping_json, use_proxy, proxy_type,
-                    proxy_host, proxy_port, proxy_username, encrypted_proxy_password, now, now
+                    proxy_host, proxy_port, proxy_username, encrypted_proxy_password, weight, now, now
                 ))
                 
                 conn.commit()
                 logger.info(f"Added new channel: {name} ({provider}) with ID: {channel_id}")
                 return channel_id
             except (sqlite3.IntegrityError, pymysql.IntegrityError) as e:
-                if "custom_key" in str(e):
-                    raise ValueError(f"Custom key '{custom_key}' already exists")
                 raise ValueError(f"Database integrity error: {e}")
     
     def update_channel(
@@ -327,7 +276,6 @@ class DatabaseManager:
         name: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
-        custom_key: Optional[str] = None,
         timeout: Optional[int] = None,
         max_retries: Optional[int] = None,
         enabled: Optional[bool] = None,
@@ -337,7 +285,8 @@ class DatabaseManager:
         proxy_host: Optional[str] = None,
         proxy_port: Optional[int] = None,
         proxy_username: Optional[str] = None,
-        proxy_password: Optional[str] = None
+        proxy_password: Optional[str] = None,
+        weight: Optional[int] = None
     ) -> bool:
         """更新渠道信息"""
         updates = []
@@ -359,9 +308,6 @@ class DatabaseManager:
             # 加密API密钥
             encrypted_api_key = encryption_manager.encrypt_api_key(api_key)
             params.append(encrypted_api_key)
-        if custom_key is not None:
-            updates.append("custom_key = ?")
-            params.append(custom_key)
         if timeout is not None:
             updates.append("timeout = ?")
             params.append(timeout)
@@ -394,6 +340,9 @@ class DatabaseManager:
             # 加密代理密码
             encrypted_proxy_password = encryption_manager.encrypt_api_key(proxy_password)
             params.append(encrypted_proxy_password)
+        if weight is not None:
+            updates.append("weight = ?")
+            params.append(weight)
         
         if not updates:
             return False
@@ -404,220 +353,210 @@ class DatabaseManager:
         
         with self.get_connection() as conn:
             try:
-                cursor = self._execute_query(conn, f'''
+                cursor = self._execute_query(conn, f"""
                     UPDATE channels 
                     SET {", ".join(updates)}
                     WHERE id = ?
-                ''', tuple(params))
-                
-                if cursor.rowcount == 0:
-                    return False
+                """, tuple(params))
                 
                 conn.commit()
-                logger.info(f"Updated channel: {channel_id}")
-                return True
-            except (sqlite3.IntegrityError, pymysql.IntegrityError) as e:
-                if "custom_key" in str(e):
-                    raise ValueError(f"Custom key '{custom_key}' already exists")
-                raise ValueError(f"Database integrity error: {e}")
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"Failed to update channel: {e}")
+                return False
     
     def delete_channel(self, channel_id: str) -> bool:
         """删除渠道"""
         with self.get_connection() as conn:
-            cursor = self._execute_query(conn, "DELETE FROM channels WHERE id = ?", (channel_id,))
-            if cursor.rowcount == 0:
+            try:
+                cursor = self._execute_query(conn, "DELETE FROM channels WHERE id = ?", (channel_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"Failed to delete channel: {e}")
                 return False
-            
-            conn.commit()
-            logger.info(f"Deleted channel: {channel_id}")
-            return True
     
     def get_channel(self, channel_id: str) -> Optional[Dict[str, Any]]:
-        """获取渠道信息"""
+        """获取单个渠道信息"""
         with self.get_connection() as conn:
-            cursor = self._execute_query(conn, "SELECT * FROM channels WHERE id = ?", (channel_id,))
-            row = cursor.fetchone()
-            
-            if row:
-                channel = dict(row)
-                if channel['models_mapping']:
-                    channel['models_mapping'] = json.loads(channel['models_mapping'])
-                # 解密API密钥
-                if channel['api_key']:
-                    channel['api_key'] = encryption_manager.decrypt_api_key(channel['api_key'])
-                # 解密代理密码
-                if channel.get('proxy_password'):
-                    channel['proxy_password'] = encryption_manager.decrypt_api_key(channel['proxy_password'])
-                return channel
-            return None
-    
-    def get_channel_by_custom_key(self, custom_key: str) -> Optional[Dict[str, Any]]:
-        """根据自定义key获取渠道信息"""
-        with self.get_connection() as conn:
-            cursor = self._execute_query(conn, 
-                "SELECT * FROM channels WHERE custom_key = ? AND enabled = 1", 
-                (custom_key,)
-            )
-            row = cursor.fetchone()
-            
-            if row:
-                channel = dict(row)
-                if channel['models_mapping']:
-                    channel['models_mapping'] = json.loads(channel['models_mapping'])
-                # 解密API密钥
-                if channel['api_key']:
-                    channel['api_key'] = encryption_manager.decrypt_api_key(channel['api_key'])
-                # 解密代理密码
-                if channel.get('proxy_password'):
-                    channel['proxy_password'] = encryption_manager.decrypt_api_key(channel['proxy_password'])
-                return channel
-            return None
-    
-    def get_all_channels(self) -> List[Dict[str, Any]]:
-        """获取所有渠道"""
-        with self.get_connection() as conn:
-            cursor = self._execute_query(conn, "SELECT * FROM channels ORDER BY created_at DESC")
-            channels = []
-            for row in cursor.fetchall():
-                channel = dict(row)
-                if channel['models_mapping']:
-                    channel['models_mapping'] = json.loads(channel['models_mapping'])
-                # 解密API密钥
-                if channel['api_key']:
-                    channel['api_key'] = encryption_manager.decrypt_api_key(channel['api_key'])
-                # 解密代理密码
-                if channel.get('proxy_password'):
-                    channel['proxy_password'] = encryption_manager.decrypt_api_key(channel['proxy_password'])
-                channels.append(channel)
-            return channels
-    
-    def get_enabled_channels(self) -> List[Dict[str, Any]]:
-        """获取所有启用的渠道"""
-        with self.get_connection() as conn:
-            cursor = self._execute_query(conn, "SELECT * FROM channels WHERE enabled = 1 ORDER BY created_at DESC")
-            channels = []
-            for row in cursor.fetchall():
-                channel = dict(row)
-                if channel['models_mapping']:
-                    channel['models_mapping'] = json.loads(channel['models_mapping'])
-                # 解密API密钥
-                if channel['api_key']:
-                    channel['api_key'] = encryption_manager.decrypt_api_key(channel['api_key'])
-                # 解密代理密码
-                if channel.get('proxy_password'):
-                    channel['proxy_password'] = encryption_manager.decrypt_api_key(channel['proxy_password'])
-                channels.append(channel)
-            return channels
+            try:
+                cursor = self._execute_query(conn, "SELECT * FROM channels WHERE id = ?", (channel_id,))
+                row = cursor.fetchone()
+                if row:
+                    columns = [description[0] for description in cursor.description]
+                    result = dict(zip(columns, row))
+                    # 解密API密钥
+                    if result['api_key']:
+                        result['api_key'] = encryption_manager.decrypt_api_key(result['api_key'])
+                    # 解密代理密码
+                    if result['proxy_password']:
+                        result['proxy_password'] = encryption_manager.decrypt_api_key(result['proxy_password'])
+                    # 解析models_mapping JSON字符串
+                    if result['models_mapping']:
+                        try:
+                            result['models_mapping'] = json.loads(result['models_mapping'])
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.warning(f"Failed to parse models_mapping for channel {channel_id}: {e}")
+                            result['models_mapping'] = {}
+                    else:
+                        result['models_mapping'] = {}
+                    return result
+                return None
+            except Exception as e:
+                logger.error(f"Failed to get channel: {e}")
+                return None
     
     def get_channels_by_provider(self, provider: str) -> List[Dict[str, Any]]:
         """按提供商获取渠道列表"""
         with self.get_connection() as conn:
-            cursor = self._execute_query(conn,
-                "SELECT * FROM channels WHERE provider = ? AND enabled = 1 ORDER BY created_at DESC", 
-                (provider,)
-            )
-            channels = []
-            for row in cursor.fetchall():
-                channel = dict(row)
-                if channel['models_mapping']:
-                    channel['models_mapping'] = json.loads(channel['models_mapping'])
-                # 解密API密钥
-                if channel['api_key']:
-                    channel['api_key'] = encryption_manager.decrypt_api_key(channel['api_key'])
-                # 解密代理密码
-                if channel.get('proxy_password'):
-                    channel['proxy_password'] = encryption_manager.decrypt_api_key(channel['proxy_password'])
-                channels.append(channel)
-            return channels
+            try:
+                cursor = self._execute_query(conn, "SELECT * FROM channels WHERE provider = ?", (provider,))
+                rows = cursor.fetchall()
+                channels = []
+                for row in rows:
+                    columns = [description[0] for description in cursor.description]
+                    channel = dict(zip(columns, row))
+                    # 解密API密钥
+                    if channel['api_key']:
+                        channel['api_key'] = encryption_manager.decrypt_api_key(channel['api_key'])
+                    # 解密代理密码
+                    if channel['proxy_password']:
+                        channel['proxy_password'] = encryption_manager.decrypt_api_key(channel['proxy_password'])
+                    # 解析models_mapping JSON字符串
+                    if channel['models_mapping']:
+                        try:
+                            channel['models_mapping'] = json.loads(channel['models_mapping'])
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.warning(f"Failed to parse models_mapping for channel {channel.get('id', 'unknown')}: {e}")
+                            channel['models_mapping'] = {}
+                    else:
+                        channel['models_mapping'] = {}
+                    channels.append(channel)
+                return channels
+            except Exception as e:
+                logger.error(f"Failed to get channels by provider: {e}")
+                return []
+    
+    def get_all_channels(self) -> List[Dict[str, Any]]:
+        """获取所有渠道"""
+        with self.get_connection() as conn:
+            try:
+                cursor = self._execute_query(conn, "SELECT * FROM channels ORDER BY created_at DESC")
+                rows = cursor.fetchall()
+                channels = []
+                for row in rows:
+                    columns = [description[0] for description in cursor.description]
+                    channel = dict(zip(columns, row))
+                    # 解密API密钥
+                    if channel['api_key']:
+                        channel['api_key'] = encryption_manager.decrypt_api_key(channel['api_key'])
+                    # 解密代理密码
+                    if channel['proxy_password']:
+                        channel['proxy_password'] = encryption_manager.decrypt_api_key(channel['proxy_password'])
+                    # 解析models_mapping JSON字符串
+                    if channel['models_mapping']:
+                        try:
+                            channel['models_mapping'] = json.loads(channel['models_mapping'])
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.warning(f"Failed to parse models_mapping for channel {channel.get('id', 'unknown')}: {e}")
+                            channel['models_mapping'] = {}
+                    else:
+                        channel['models_mapping'] = {}
+                    channels.append(channel)
+                return channels
+            except Exception as e:
+                logger.error(f"Failed to get all channels: {e}")
+                return []
+    
+    def get_enabled_channels(self) -> List[Dict[str, Any]]:
+        """获取所有启用的渠道"""
+        with self.get_connection() as conn:
+            try:
+                cursor = self._execute_query(conn, "SELECT * FROM channels WHERE enabled = 1 ORDER BY created_at DESC")
+                rows = cursor.fetchall()
+                channels = []
+                for row in rows:
+                    columns = [description[0] for description in cursor.description]
+                    channel = dict(zip(columns, row))
+                    # 解密API密钥
+                    if channel['api_key']:
+                        channel['api_key'] = encryption_manager.decrypt_api_key(channel['api_key'])
+                    # 解密代理密码
+                    if channel['proxy_password']:
+                        channel['proxy_password'] = encryption_manager.decrypt_api_key(channel['proxy_password'])
+                    # 解析models_mapping JSON字符串
+                    if channel['models_mapping']:
+                        try:
+                            channel['models_mapping'] = json.loads(channel['models_mapping'])
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.warning(f"Failed to parse models_mapping for channel {channel.get('id', 'unknown')}: {e}")
+                            channel['models_mapping'] = {}
+                    else:
+                        channel['models_mapping'] = {}
+                    channels.append(channel)
+                return channels
+            except Exception as e:
+                logger.error(f"Failed to get enabled channels: {e}")
+                return []
+    
+    def get_config(self, key: str) -> Optional[str]:
+        """获取配置"""
+        with self.get_connection() as conn:
+            try:
+                cursor = self._execute_query(conn, "SELECT value FROM system_config WHERE key = ?", (key,))
+                row = cursor.fetchone()
+                return row[0] if row else None
+            except Exception as e:
+                logger.error(f"Failed to get config: {e}")
+                return None
     
     def set_config(self, key: str, value: str):
-        """设置系统配置"""
-        now = datetime.now().isoformat()
-        
+        """设置配置"""
         with self.get_connection() as conn:
-            if self.db_type == "sqlite":
-                cursor = self._execute_query(conn, '''
-                    INSERT OR REPLACE INTO system_config (key, value, created_at, updated_at)
-                    VALUES (?, ?, 
-                        COALESCE((SELECT created_at FROM system_config WHERE key = ?), ?),
-                        ?)
-                ''', (key, value, key, now, now))
-            elif self.db_type == "mysql":
-                cursor = self._execute_query(conn, '''
-                    INSERT INTO system_config (`key`, `value`, created_at, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE
-                    `value` = VALUES(`value`),
-                    updated_at = VALUES(updated_at)
-                ''', (key, value, now, now))
-            conn.commit()
-    
-    def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        """获取系统配置"""
-        with self.get_connection() as conn:
-            if self.db_type == "sqlite":
-                cursor = self._execute_query(conn, "SELECT value FROM system_config WHERE key = ?", (key,))
-            elif self.db_type == "mysql":
-                cursor = self._execute_query(conn, "SELECT `value` FROM system_config WHERE `key` = ?", (key,))
-            row = cursor.fetchone()
-            return row['value'] if row else default
+            try:
+                now = datetime.now().isoformat()
+                cursor = self._execute_query(conn, 
+                    "INSERT OR REPLACE INTO system_config (key, value, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (key, value, now, now))
+                conn.commit()
+                logger.info(f"Config set: {key}")
+            except Exception as e:
+                logger.error(f"Failed to set config: {e}")
+                raise
     
     def delete_config(self, key: str) -> bool:
-        """删除系统配置"""
+        """删除配置"""
         with self.get_connection() as conn:
-            if self.db_type == "sqlite":
+            try:
                 cursor = self._execute_query(conn, "DELETE FROM system_config WHERE key = ?", (key,))
-            elif self.db_type == "mysql":
-                cursor = self._execute_query(conn, "DELETE FROM system_config WHERE `key` = ?", (key,))
-            conn.commit()
-            return cursor.rowcount > 0
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"Failed to delete config: {e}")
+                return False
     
-    def get_configs_by_prefix(self, prefix: str) -> List[Dict[str, str]]:
-        """获取指定前缀的所有配置"""
+    def get_configs_by_prefix(self, prefix: str) -> List[Dict[str, Any]]:
+        """按前缀获取配置列表"""
         with self.get_connection() as conn:
-            if self.db_type == "sqlite":
-                cursor = self._execute_query(conn,
-                    "SELECT key, value FROM system_config WHERE key LIKE ?", 
-                    (f"{prefix}%",)
-                )
-            elif self.db_type == "mysql":
-                cursor = self._execute_query(conn,
-                    "SELECT `key`, `value` FROM system_config WHERE `key` LIKE ?", 
-                    (f"{prefix}%",)
-                )
-            results = cursor.fetchall()
-            return [{"key": row["key"], "value": row["value"]} for row in results]
-    
-    def has_encrypted_api_keys(self) -> bool:
-        """检查数据库中是否存在加密的API密钥"""
-        try:
-            with self.get_connection() as conn:
-                cursor = self._execute_query(conn,
-                    "SELECT COUNT(*) as count FROM channels WHERE api_key LIKE ?"
-                    , ("encrypted:%",)
-                )
-                row = cursor.fetchone()
-                return row['count'] > 0 if row else False
-        except Exception:
-            # 如果表不存在或查询失败，返回False
-            return False
-    
+            try:
+                cursor = self._execute_query(conn, "SELECT key, value, created_at, updated_at FROM system_config WHERE key LIKE ? ORDER BY key", (f"{prefix}%",))
+                rows = cursor.fetchall()
+                configs = []
+                for row in rows:
+                    columns = [description[0] for description in cursor.description]
+                    config = dict(zip(columns, row))
+                    configs.append(config)
+                return configs
+            except Exception as e:
+                logger.error(f"Failed to get configs by prefix: {e}")
+                return []
 
 
-
-# 全局数据库管理器实例（懒加载）
-_db_manager = None
-
-def get_db_manager() -> DatabaseManager:
+# 全局数据库管理器实例
+def get_db_manager():
     """获取数据库管理器实例"""
-    global _db_manager
-    if _db_manager is None:
-        _db_manager = DatabaseManager()
-    return _db_manager
+    return DatabaseManager()
 
-# 向后兼容的属性访问
-class _DBManagerProxy:
-    def __getattr__(self, name):
-        return getattr(get_db_manager(), name)
 
-db_manager = _DBManagerProxy()
+# 创建全局实例
+db_manager = get_db_manager()

@@ -3,11 +3,11 @@ version: "3.8"
 services:
   api:
     # 使用预构建镜像（推荐）
-    image: ghcr.io/chinrain/api-conversion:0.2.4
+    # image: ghcr.io/chinrain/api-conversion:0.2.4
     # 或者本地构建（取消下面的注释，并注释掉上面的 image）
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: api-conversion
     ports:
       - "8000:8000"
@@ -18,12 +18,12 @@ services:
     environment:
       # 必需配置
       - ADMIN_PASSWORD=admin123
+      - ADMIN_API_KEY=sk-123
       # 数据库配置 - SQLite（默认）
       - DATABASE_TYPE=sqlite
       - DATABASE_PATH=data/channels.db
-
       # AI 服务配置（建议配置）
-      # - ANTHROPIC_MAX_TOKENS=32000 # Claude 模型最大 token 数限制
+      - ANTHROPIC_MAX_TOKENS=32000 # Claude 模型最大 token 数限制
       # - OPENAI_REASONING_MAX_TOKENS=32000 # OpenAI 思考模型 max_completion_tokens 默认值
 
       # ============================================
@@ -88,4 +88,3 @@ services:
 # networks:
 #   api-network:
 #     driver: bridge
-
