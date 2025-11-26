@@ -38,7 +38,7 @@ class ConverterFactory:
 
         converter_class = converters.get(format_name)
         if converter_class:
-            logger.info(f"Created converter for format: {format_name}")
+            logger.debug(f"Created converter for format: {format_name}")
             return converter_class()
         else:
             logger.error(f"Unsupported format: {format_name}")

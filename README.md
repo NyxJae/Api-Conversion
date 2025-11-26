@@ -245,6 +245,8 @@ docker-compose logs -f
 
 # 4. 停止服务
 docker-compose down
+# 强制重新构建镜像
+docker-compose up -d --build
 ```
 
 访问 http://localhost:8000 使用系统

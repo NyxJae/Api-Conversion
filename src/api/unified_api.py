@@ -19,7 +19,7 @@ from src.utils.logger import setup_logger
 from src.utils.exceptions import ChannelNotFoundError, ConversionError, APIError, TimeoutError
 from src.utils.http_client import get_http_client
 from src.utils.auth import UserAuth
-from src.utils.channel_selector import channel_selector
+from src.channels.channel_selector import channel_selector
 
 logger = setup_logger("unified_api")
 
@@ -344,6 +344,142 @@ def extract_gemini_api_key(request: Request) -> str:
     raise HTTPException(status_code=401, detail="Missing API key")
 
 
+async def smart_forward_request(
+    model_name: str,
+    request_data: Dict[str, Any],
+    source_format: str,
+    headers: Dict[str, str]
+):
+    """
+    智能请求转发：支持渠道级重试和渠道切换
+    
+    机制：
+    1. 选定渠道后，在该渠道上重试 max_retries 次
+    2. 如果该渠道失败，切换到其他支持该模型的渠道
+    3. 最多切换 3 次渠道
+    
+    Args:
+        model_name: 模型名称
+        request_data: 请求数据
+        source_format: 源格式（openai/anthropic/gemini）
+        headers: 请求头
+        
+    Returns:
+        Tuple[response, channel]: 响应数据（流式或非流式）和使用的渠道
+        
+    Raises:
+        Exception: 所有渠道都失败时抛出异常
+    """
+    import asyncio
+    
+    MAX_CHANNEL_SWITCHES = 3  # 最多切换3次渠道
+    last_error = None
+    tried_channels = set()  # 记录已尝试的渠道ID
+    
+    # 获取所有支持该模型的渠道
+    all_channels = channel_selector.get_available_channels_for_model(model_name)
+    if not all_channels:
+        raise Exception(f"No channels support model: {model_name}")
+    
+    logger.debug(f"Found {len(all_channels)} channels supporting model {model_name}")
+    
+    for channel_switch_attempt in range(MAX_CHANNEL_SWITCHES):
+        # 随机选择一个未尝试过的渠道
+        available_channels = [ch for ch in all_channels if ch.id not in tried_channels]
+        
+        if not available_channels:
+            logger.error(f"All {len(all_channels)} channels have been tried for model {model_name}")
+            break
+        
+        # 随机选择渠道（使用权重）
+        import random
+        if len(available_channels) == 1:
+            channel = available_channels[0]
+        else:
+            total_weight = sum(ch.weight for ch in available_channels)
+            if total_weight > 0:
+                rand_val = random.uniform(0, total_weight)
+                current = 0
+                channel = available_channels[0]
+                for ch in available_channels:
+                    current += ch.weight
+                    if rand_val <= current:
+                        channel = ch
+                        break
+            else:
+                channel = random.choice(available_channels)
+        
+        tried_channels.add(channel.id)
+        max_retries = getattr(channel, 'max_retries', 3)
+        
+        logger.info(
+            f"[Attempt {channel_switch_attempt + 1}/{MAX_CHANNEL_SWITCHES}] "
+            f"Trying channel '{channel.name}' (ID: {channel.id}, provider: {channel.provider}) "
+            f"with max_retries={max_retries}"
+        )
+        
+        # 在选定的渠道上进行重试
+        for retry_attempt in range(max_retries + 1):
+            try:
+                if retry_attempt > 0:
+                    # 指数退避：等待时间 = 2^retry_attempt 秒
+                    wait_time = 2 ** (retry_attempt - 1)
+                    logger.info(
+                        f"[Channel: {channel.name}] Retry {retry_attempt}/{max_retries} "
+                        f"after {wait_time}s backoff"
+                    )
+                    await asyncio.sleep(wait_time)
+                
+                # 发送请求
+                logger.debug(
+                    f"[Channel: {channel.name}] Sending request "
+                    f"(attempt {retry_attempt + 1}/{max_retries + 1})"
+                )
+                
+                response = await forward_request_to_channel(
+                    channel=channel,
+                    request_data=request_data,
+                    source_format=source_format,
+                    headers=headers
+                )
+                
+                # 请求成功
+                logger.debug(
+                    f"[SUCCESS] Request succeeded on channel '{channel.name}' "
+                    f"(attempt {retry_attempt + 1}/{max_retries + 1})"
+                )
+                return response, channel  # 返回响应和渠道信息
+                
+            except Exception as e:
+                last_error = e
+                error_msg = str(e)
+                
+                logger.warning(
+                    f"[FAILED] [Channel: {channel.name}] Request failed "
+                    f"(attempt {retry_attempt + 1}/{max_retries + 1}): {error_msg}"
+                )
+                
+                # 如果是最后一次重试，记录详细错误
+                if retry_attempt == max_retries:
+                    logger.error(
+                        f"Channel '{channel.name}' exhausted all {max_retries + 1} attempts. "
+                        f"Last error: {error_msg}"
+                    )
+                    break  # 退出重试循环，尝试下一个渠道
+                
+                # 继续下一次重试
+                continue
+    
+    # 所有渠道都失败了
+    error_message = (
+        f"All channels failed for model '{model_name}'. "
+        f"Tried {len(tried_channels)} channel(s). "
+        f"Last error: {last_error}"
+    )
+    logger.error(error_message)
+    raise Exception(error_message)
+
+
 async def forward_request_to_channel(
     channel: ChannelInfo,
     request_data: Dict[str, Any],
@@ -368,11 +504,11 @@ async def forward_request_to_channel(
                     break
             
             if has_images:
-                logger.info(f"Anthropic-to-Anthropic with images detected, applying image ordering best practice")
+                logger.debug(f"Anthropic-to-Anthropic with images detected, applying image ordering best practice")
                 # 强制进行转换以应用图片排序最佳实践
                 conversion_result = convert_request(source_format, channel.provider, request_data, headers)
             else:
-                logger.info(f"Anthropic-to-Anthropic without images, using passthrough")
+                logger.debug(f"Anthropic-to-Anthropic without images, using passthrough")
                 conversion_result = ConversionResult(success=True, data=request_data)
         else:
             logger.info(f"Same format detected, skipping request conversion: {source_format} -> {channel.provider}")
@@ -447,33 +583,105 @@ async def forward_request_to_channel(
         if getattr(channel, 'use_proxy', False):
             proxy_host = getattr(channel, 'proxy_host', None)
             proxy_port = getattr(channel, 'proxy_port', None)
-            logger.info(f"PROXY CHECK: Channel {channel.name} has proxy enabled - {proxy_host}:{proxy_port}")
+            logger.debug(f"PROXY CHECK: Channel {channel.name} has proxy enabled - {proxy_host}:{proxy_port}")
         else:
-            logger.info(f"PROXY CHECK: Channel {channel.name} has no proxy configured")
+            logger.debug(f"PROXY CHECK: Channel {channel.name} has no proxy configured")
         
         if is_streaming:
-            # 流式请求处理 - 创建独立的生成器函数
-            async def stream_generator():
-                try:
-                    async with get_http_client(channel, timeout=channel.timeout) as client:
-                        async with client.stream(
-                            "POST",
-                            url=url,
-                            json=conversion_result.data,
-                            headers=target_headers
-                        ) as response:
-                            async for chunk in handle_streaming_response(response, channel, request_data, source_format):
-                                yield chunk
-                except httpx.TimeoutException:
-                    logger.error(f"Streaming request timeout after {channel.timeout} seconds")
-                    raise TimeoutError(f"Streaming request timeout after {channel.timeout} seconds")
-                except Exception as e:
-                    error_msg = f"Streaming request failed: {str(e) if e else 'Unknown error'}"
-                    logger.error(error_msg)
-                    logger.exception("Streaming request exception details:")
-                    raise APIError(error_msg)
+            # 流式请求处理 - 先建立连接并检查初始状态，确保异常能被重试逻辑捕获
+            client = None
+            http_client = None
+            stream_context = None
             
-            return stream_generator()
+            try:
+                client = get_http_client(channel, timeout=channel.timeout)
+                # 先建立连接
+                http_client = await client.__aenter__()
+                
+                # 发起流式请求
+                stream_context = http_client.stream(
+                    "POST",
+                    url=url,
+                    json=conversion_result.data,
+                    headers=target_headers
+                )
+                response = await stream_context.__aenter__()
+                
+                # 检查初始响应状态 - 如果失败，立即抛出异常以触发重试
+                if response.status_code != 200:
+                    error_msg = f"Streaming request failed with status {response.status_code}"
+                    logger.error(error_msg)
+                    raise APIError(error_msg)
+                
+                # 连接成功，创建生成器包装已建立的连接
+                async def stream_generator():
+                    try:
+                        async for chunk in handle_streaming_response(response, channel, request_data, source_format):
+                            yield chunk
+                    except httpx.TimeoutException:
+                        logger.error(f"Streaming request timeout after {channel.timeout} seconds")
+                        raise TimeoutError(f"Streaming request timeout after {channel.timeout} seconds")
+                    except Exception as e:
+                        error_msg = f"Streaming request failed: {str(e) if e else 'Unknown error'}"
+                        logger.error(error_msg)
+                        logger.exception("Streaming request exception details:")
+                        raise APIError(error_msg)
+                    finally:
+                        # 确保资源被正确释放
+                        try:
+                            if stream_context:
+                                await stream_context.__aexit__(None, None, None)
+                            if client:
+                                await client.__aexit__(None, None, None)
+                        except Exception as cleanup_error:
+                            logger.warning(f"Error during stream cleanup: {cleanup_error}")
+                
+                return stream_generator()
+                
+            except httpx.TimeoutException:
+                # 清理资源
+                if stream_context:
+                    try:
+                        await stream_context.__aexit__(None, None, None)
+                    except:
+                        pass
+                if client:
+                    try:
+                        await client.__aexit__(None, None, None)
+                    except:
+                        pass
+                logger.error(f"Streaming request timeout after {channel.timeout} seconds")
+                raise TimeoutError(f"Streaming request timeout after {channel.timeout} seconds")
+            except (TimeoutError, APIError):
+                # 清理资源
+                if stream_context:
+                    try:
+                        await stream_context.__aexit__(None, None, None)
+                    except:
+                        pass
+                if client:
+                    try:
+                        await client.__aexit__(None, None, None)
+                    except:
+                        pass
+                # 重新抛出我们自己的异常，以便重试逻辑捕获
+                raise
+            except Exception as e:
+                # 清理资源
+                if stream_context:
+                    try:
+                        await stream_context.__aexit__(None, None, None)
+                    except:
+                        pass
+                if client:
+                    try:
+                        await client.__aexit__(None, None, None)
+                    except:
+                        pass
+                error_msg = f"Streaming request failed: {str(e) if e else 'Unknown error'}"
+                logger.error(error_msg)
+                logger.exception("Streaming request exception details:")
+                raise APIError(error_msg)
         else:
             # 统一处理非流式请求：发送转换后的请求到目标渠道
             logger.debug(f"Sending non-streaming request to {channel.provider}: {url}")
@@ -499,7 +707,7 @@ async def forward_request_to_channel(
 
 async def handle_streaming_response(response, channel, request_data, source_format):
     """处理流式响应"""
-    logger.info(f"STREAMING RESPONSE: channel.provider='{channel.provider}', source_format='{source_format}', status={response.status_code}")
+    logger.debug(f"STREAMING RESPONSE: channel.provider='{channel.provider}', source_format='{source_format}', status={response.status_code}")
     logger.debug(f"Received streaming response from {channel.provider}: status={response.status_code}")
     
     if response.status_code == 200:
@@ -524,9 +732,9 @@ async def handle_streaming_response(response, channel, request_data, source_form
 
         # For same-format passthrough, we need to preserve the complete SSE structure
         if channel.provider == source_format:
-            logger.info(f"PASSTHROUGH MODE ACTIVATED: {channel.provider} -> {source_format}")
-            logger.info(f"PASSTHROUGH: Response status = {response.status_code}")
-            logger.info(f"PASSTHROUGH: Response headers = {dict(response.headers)}")
+            logger.debug(f"PASSTHROUGH MODE ACTIVATED: {channel.provider} -> {source_format}")
+            logger.debug(f"PASSTHROUGH: Response status = {response.status_code}")
+            logger.debug(f"PASSTHROUGH: Response headers = {dict(response.headers)}")
             
             # Direct passthrough using aiter_bytes to preserve exact formatting
             # 使用字节流传输以保持原始格式不变
@@ -535,7 +743,7 @@ async def handle_streaming_response(response, channel, request_data, source_form
                     if chunk:  # 只传输非空chunk
                         yield chunk.decode('utf-8')
                             
-                logger.info(f"PASSTHROUGH COMPLETED")
+                logger.debug(f"PASSTHROUGH COMPLETED")
             except Exception as e:
                 logger.error(f"PASSTHROUGH ERROR: {e}")
                 raise
@@ -1084,9 +1292,11 @@ async def unified_gemini_count_tokens_endpoint(
 
 
 async def handle_unified_request(request, api_key: str, source_format: str):
-    """统一请求处理逻辑"""
+    """统一请求处理逻辑 - 支持重试和渠道切换"""
     try:
-        logger.debug(f"Processing request: source_format={source_format}, api_key={mask_api_key(api_key)}")
+        # 获取请求路径
+        request_path = str(request.url.path) if hasattr(request, 'url') else "unknown"
+        logger.debug(f"Processing request: source_format={source_format}, api_key={mask_api_key(api_key)}, path={request_path}")
         
         # 1. 获取请求数据
         request_data = await request.json()
@@ -1096,7 +1306,8 @@ async def handle_unified_request(request, api_key: str, source_format: str):
             raise HTTPException(status_code=400, detail="Model name is required")
         
         model_name = request_data.get("model")
-        logger.info(f"Request for model: {model_name}")
+        is_streaming = request_data.get("stream", False)
+        logger.debug(f"[REQUEST] {request_path} | Model: {model_name} | Stream: {is_streaming}")
         
         # Anthropic格式需要max_tokens字段
         if source_format == "anthropic" and not request_data.get("max_tokens"):
@@ -1107,10 +1318,11 @@ async def handle_unified_request(request, api_key: str, source_format: str):
             if not request_data.get("input"):
                 raise HTTPException(status_code=400, detail="input is required for Responses format")
         
-        # 3. 使用渠道选择器选择合适的渠道
-        channel = channel_selector.select_channel(model_name)
-        if not channel:
-            logger.error(f"No available channel supports model: {model_name}")
+# 3. 使用智能重试机制处理请求
+        try:
+            response_data, used_channel = await smart_forward_request(model_name, request_data, source_format, dict(request.headers))
+        except Exception as e:
+            logger.error(f"All retry attempts failed for model {model_name}: {e}")
             # 提供详细的错误信息
             available_models = channel_selector.get_available_models()
             all_available = []
@@ -1119,27 +1331,18 @@ async def handle_unified_request(request, api_key: str, source_format: str):
             
             raise HTTPException(
                 status_code=503, 
-                detail=f"No available channels support model '{model_name}'. Available models: {', '.join(sorted(all_available))}"
+                detail=f"All channels failed for model '{model_name}'. Last error: {str(e)}. Available models: {', '.join(sorted(all_available))}"
             )
         
-        logger.debug(f"Unified API: source_format={source_format}, model={model_name}, selected_channel={channel.name} (provider: {channel.provider})")
-        logger.debug(f"Request stream parameter: {request_data.get('stream', False)}")
-        
-        # 4. 根据流式参数选择处理方式
-        is_streaming = request_data.get("stream", False)
-        
-        if is_streaming:
-            # 流式请求
-            logger.debug("Processing streaming request")
-            stream_generator = await forward_request_to_channel(
-                channel=channel,
-                request_data=request_data,
-                source_format=source_format,
-                headers=dict(request.headers)
+        # 4. 根据响应类型返回结果
+        if hasattr(response_data, '__aiter__') or hasattr(response_data, '__anext__'):
+            # 流式响应
+            logger.debug(
+                f"[RESPONSE] {request_path} | 200 OK | Model: {model_name} | "
+                f"Channel: {used_channel.name} ({used_channel.provider}) | Stream: True"
             )
-            
             return StreamingResponse(
-                stream_generator,
+                response_data,
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1151,15 +1354,11 @@ async def handle_unified_request(request, api_key: str, source_format: str):
                 }
             )
         else:
-            # 非流式请求
-            logger.debug("Processing non-streaming request")
-            response_data = await forward_request_to_channel(
-                channel=channel,
-                request_data=request_data,
-                source_format=source_format,
-                headers=dict(request.headers)
+            # 非流式响应
+            logger.debug(
+                f"[RESPONSE] {request_path} | 200 OK | Model: {model_name} | "
+                f"Channel: {used_channel.name} ({used_channel.provider}) | Stream: False"
             )
-            
             logger.debug(f"Final response data type: {type(response_data)}")
             logger.debug(f"Final response data: {safe_log_response(response_data)}")
             

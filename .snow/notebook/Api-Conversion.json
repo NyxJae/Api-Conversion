@@ -1,0 +1,11 @@
+{
+  "src/api/unified_api.py": [
+    {
+      "id": "notebook-1764153093791_e9sb81f9t",
+      "filePath": "src/api/unified_api.py",
+      "note": "🔧 资源管理修复：在流式请求异常处理中添加资源清理（642-684行）。每个异常处理分支都会确保stream_context和client被正确释放，防止资源泄漏。使用try-except包装清理逻辑，避免清理过程中的异常影响主要异常抛出。",
+      "createdAt": "2025-11-26T18:31:33.791",
+      "updatedAt": "2025-11-26T18:31:33.791"
+    }
+  ]
+}
