@@ -793,7 +793,20 @@ class APIConverter {
 
   async testChannel(channelId) {
     try {
-      const response = await fetch(`/api/channels/${channelId}/test`);
+      // 获取管理员API Key用于认证
+      const adminAPIKey = await this.getAdminAPIKey();
+      const headers = {
+        "Content-Type": "application/json",
+      };
+
+      // 如果有管理员API Key，则使用API Key认证
+      if (adminAPIKey) {
+        headers["x-admin-api-key"] = adminAPIKey;
+      }
+
+      const response = await fetch(`/api/channels/${channelId}/test`, {
+        headers: headers,
+      });
       const result = await response.json();
 
       if (response.ok) {
@@ -814,11 +827,20 @@ class APIConverter {
     if (!channel) return;
 
     try {
+      // 获取管理员API Key用于认证
+      const adminAPIKey = await this.getAdminAPIKey();
+      const headers = {
+        "Content-Type": "application/json",
+      };
+
+      // 如果有管理员API Key，则使用API Key认证
+      if (adminAPIKey) {
+        headers["x-admin-api-key"] = adminAPIKey;
+      }
+
       const response = await fetch(`/api/channels/${channelId}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: headers,
         body: JSON.stringify({
           enabled: !channel.enabled,
         }),
@@ -840,8 +862,19 @@ class APIConverter {
     // 先获取渠道详细信息（包含真实密码）
     let channel;
     try {
+      // 获取管理员API Key用于认证
+      const adminAPIKey = await this.getAdminAPIKey();
+      const headers = {
+        "Content-Type": "application/json",
+      };
+
+      // 如果有管理员API Key，则使用API Key认证
+      if (adminAPIKey) {
+        headers["x-admin-api-key"] = adminAPIKey;
+      }
+
       const response = await fetch(`/api/channels/${channelId}`, {
-        credentials: "same-origin", // 包含cookies以进行会话认证
+        headers: headers,
       });
       const result = await response.json();
 
@@ -882,7 +915,8 @@ class APIConverter {
       apiKeyInput.type = "password";
       const apiKeyIcon = document.getElementById("api_key_icon");
       if (apiKeyIcon) {
-        apiKeyIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        apiKeyIcon.innerHTML =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
         apiKeyIcon.title = "显示";
       }
     } else {
@@ -893,7 +927,8 @@ class APIConverter {
       apiKeyInput.type = "password";
       const apiKeyIcon = document.getElementById("api_key_icon");
       if (apiKeyIcon) {
-        apiKeyIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        apiKeyIcon.innerHTML =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
         apiKeyIcon.title = "显示";
       }
     }
@@ -927,7 +962,8 @@ class APIConverter {
           "proxy_password_icon"
         );
         if (proxyPasswordIcon) {
-          proxyPasswordIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+          proxyPasswordIcon.innerHTML =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
           proxyPasswordIcon.title = "显示";
         }
       } else {
@@ -939,7 +975,8 @@ class APIConverter {
           "proxy_password_icon"
         );
         if (proxyPasswordIcon) {
-          proxyPasswordIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+          proxyPasswordIcon.innerHTML =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
           proxyPasswordIcon.title = "显示";
         }
       }
@@ -955,7 +992,8 @@ class APIConverter {
       proxyPasswordInput.type = "password";
       const proxyPasswordIcon = document.getElementById("proxy_password_icon");
       if (proxyPasswordIcon) {
-        proxyPasswordIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        proxyPasswordIcon.innerHTML =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
         proxyPasswordIcon.title = "显示";
       }
     }
@@ -1016,7 +1054,8 @@ class APIConverter {
     apiKeyInput.type = "password";
     const apiKeyIcon = document.getElementById("api_key_icon");
     if (apiKeyIcon) {
-      apiKeyIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+      apiKeyIcon.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
       apiKeyIcon.title = "显示";
     }
 
@@ -1027,7 +1066,8 @@ class APIConverter {
     proxyPasswordInput.type = "password";
     const proxyPasswordIcon = document.getElementById("proxy_password_icon");
     if (proxyPasswordIcon) {
-      proxyPasswordIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+      proxyPasswordIcon.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
       proxyPasswordIcon.title = "显示";
     }
     toggleProxyFields();
@@ -1257,8 +1297,10 @@ function togglePasswordVisibility(fieldId) {
   const passwordField = document.getElementById(fieldId);
   const iconElement = document.getElementById(fieldId + "_icon");
 
-  const ICON_EYE = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-  const ICON_EYE_SLASH = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+  const ICON_EYE =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ICON_EYE_SLASH =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
 
   if (passwordField && iconElement) {
     if (passwordField.type === "password") {
