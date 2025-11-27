@@ -154,8 +154,13 @@ class ChannelManager:
         if not success:
             raise ChannelNotFoundError(f"Channel not found: {channel_id}")
 
+        # 清除缓存以确保下次请求时重新加载最新配置
+        from .channel_selector import channel_selector
+        channel_selector.update_cache()
+        
+        logger.info(f"Channel {channel_id} updated and cache cleared")
+
         return True
-    
     def delete_channel(self, channel_id: str) -> bool:
         """删除渠道"""
         success = db_manager.delete_channel(channel_id)
