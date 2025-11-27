@@ -598,6 +598,16 @@ async def forward_request_to_channel(
                 # 先建立连接
                 http_client = await client.__aenter__()
                 
+                # 记录连接诊断信息
+                logger.debug(f"[Channel: {channel.name}] 尝试连接到: {url}")
+                if getattr(channel, 'use_proxy', False):
+                    proxy_host = getattr(channel, 'proxy_host', 'unknown')
+                    proxy_port = getattr(channel, 'proxy_port', 'unknown')
+                    logger.debug(f"[Channel: {channel.name}] 使用代理: {proxy_host}:{proxy_port}")
+                else:
+                    logger.debug(f"[Channel: {channel.name}] 直连模式（无代理）")
+                logger.debug(f"[Channel: {channel.name}] 超时设置: {channel.timeout}秒")
+                
                 # 发起流式请求
                 stream_context = http_client.stream(
                     "POST",
@@ -638,6 +648,35 @@ async def forward_request_to_channel(
                 
                 return stream_generator()
                 
+            except httpx.ConnectError as e:
+                # 优雅处理连接错误 - 通常是网络问题或代理配置问题
+                # 清理资源
+                if stream_context:
+                    try:
+                        await stream_context.__aexit__(None, None, None)
+                    except:
+                        pass
+                if client:
+                    try:
+                        await client.__aexit__(None, None, None)
+                    except:
+                        pass
+                
+                # 提供友好的错误信息和诊断建议
+                proxy_info = ""
+                if getattr(channel, 'use_proxy', False):
+                    proxy_host = getattr(channel, 'proxy_host', 'unknown')
+                    proxy_port = getattr(channel, 'proxy_port', 'unknown')
+                    proxy_info = f" (代理: {proxy_host}:{proxy_port})"
+                
+                # 记录详细的连接错误信息
+                logger.error(f"[Channel: {channel.name}] 连接失败: 无法建立到 {url} 的连接{proxy_info}")
+                logger.error(f"[Channel: {channel.name}] 原始错误: {str(e)}")
+                logger.warning(f"[Channel: {channel.name}] 可能原因: 1) 网络连接问题 2) 代理服务器不可用 3) 目标服务器宕机 4) DNS解析失败")
+                logger.info(f"[Channel: {channel.name}] 建议: 检查网络连通性和代理配置，稍后将自动重试")
+                
+                # 重新抛出APIError以触发重试机制
+                raise APIError(f"Connection failed: Unable to connect to {url}{proxy_info}")
             except httpx.TimeoutException:
                 # 清理资源
                 if stream_context:
