@@ -89,7 +89,7 @@ class AnthropicConverter(BaseConverter):
             else:
                 effort = "high"
             
-            self.logger.info(f"🎯 Budget tokens {budget_tokens} -> reasoning_effort '{effort}' (thresholds: low<={low_threshold}, high<={high_threshold})")
+            self.logger.debug(f"🎯 Budget tokens {budget_tokens} -> reasoning_effort '{effort}' (thresholds: low<={low_threshold}, high<={high_threshold})")
             return effort
             
         except ValueError as e:
@@ -317,7 +317,7 @@ class AnthropicConverter(BaseConverter):
             if "max_tokens" in data:
                 max_completion_tokens = data["max_tokens"]
                 result_data.pop("max_tokens", None)  # 移除max_tokens，使用max_completion_tokens
-                self.logger.info(f"Using client max_tokens as max_completion_tokens: {max_completion_tokens}")
+                self.logger.debug(f"Using client max_tokens as max_completion_tokens: {max_completion_tokens}")
             else:
                 # 优先级2：环境变量OPENAI_REASONING_MAX_TOKENS
                 import os
@@ -335,9 +335,9 @@ class AnthropicConverter(BaseConverter):
                     raise ConversionError("For OpenAI reasoning models, max_completion_tokens is required. Please specify max_tokens in the request or set OPENAI_REASONING_MAX_TOKENS environment variable.")
             
             result_data["max_completion_tokens"] = max_completion_tokens
-            self.logger.info(f"Anthropic thinking enabled -> OpenAI reasoning_effort='{reasoning_effort}', max_completion_tokens={max_completion_tokens}")
+            self.logger.debug(f"Anthropic thinking enabled -> OpenAI reasoning_effort='{reasoning_effort}', max_completion_tokens={max_completion_tokens}")
             if budget_tokens:
-                self.logger.info(f"Budget tokens: {budget_tokens} -> reasoning_effort: '{reasoning_effort}'")
+                self.logger.debug(f"Budget tokens: {budget_tokens} -> reasoning_effort: '{reasoning_effort}'")
         
         return ConversionResult(success=True, data=result_data)
     
@@ -423,13 +423,13 @@ class AnthropicConverter(BaseConverter):
                 generation_config["thinkingConfig"] = {
                     "thinkingBudget": budget_tokens
                 }
-                self.logger.info(f"Anthropic thinkingBudget {budget_tokens} -> Gemini thinkingBudget {budget_tokens}")
+                self.logger.debug(f"Anthropic thinkingBudget {budget_tokens} -> Gemini thinkingBudget {budget_tokens}")
             elif "thinking" in data:
                 # 如果没有设置budget_tokens，对应Gemini的-1（动态思考）
                 generation_config["thinkingConfig"] = {
                     "thinkingBudget": -1
                 }
-                self.logger.info("Anthropic thinking enabled without budget -> Gemini thinkingBudget -1 (dynamic)")
+                self.logger.debug("Anthropic thinking enabled without budget -> Gemini thinkingBudget -1 (dynamic)")
         
         # 确保 generationConfig 永远存在，避免 Gemini 2.0+ 的 500 错误
         result_data["generationConfig"] = generation_config or {}

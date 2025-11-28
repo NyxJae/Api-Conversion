@@ -1,21 +1,22 @@
 """
 渠道选择器
-负责根据模型名和权重选择合适的渠道
+根据模型名和权重选择合适的渠道进行负载均衡
 """
 import random
 import time
-from typing import Dict, List, Optional, Any
+import re
+from typing import List, Optional, Dict, Any
 from threading import Lock
 
+from channels.channel_manager import channel_manager, ChannelInfo
 from src.utils.logger import setup_logger
 from src.utils.exceptions import ChannelError
-from src.channels.channel_manager import ChannelInfo, channel_manager
 
 logger = setup_logger("channel_selector")
 
 
 class ChannelSelector:
-    """渠道选择器，实现智能负载均衡"""
+    """渠道选择器，实现智能负载均衡和模型匹配"""
     
     def __init__(self, cache_ttl: int = 300):
         """
@@ -31,33 +32,34 @@ class ChannelSelector:
         
         logger.info(f"ChannelSelector initialized with cache TTL: {cache_ttl}s")
     
-    def select_channel_by_model(self, model_name: str) -> Optional[ChannelInfo]:
+    def select_channel(self, model_name: str) -> Optional[ChannelInfo]:
         """
-        根据模型名选择渠道
+        根据模型名选择合适的渠道
         
         Args:
-            model_name: 模型名称
+            model_name: 请求的模型名
             
         Returns:
-            选中的渠道信息，如果没有可用渠道则返回None
-            
-        Raises:
-            ChannelError: 渠道选择过程中发生错误
+            选中的渠道，如果没有找到合适的渠道则返回None
         """
         try:
+            logger.info(f"Selecting channel for model: {model_name}")
+            
             # 获取支持该模型的所有渠道
             available_channels = self.get_available_channels_for_model(model_name)
             
             if not available_channels:
-                logger.warning(f"No available channels found for model: {model_name}")
+                logger.warning(f"No channels support model: {model_name}")
+                # 列出所有可用的模型映射用于调试
+                self._log_available_models()
                 return None
             
-            # 按权重随机选择渠道
-            selected_channel = self._select_by_weight(available_channels)
+            # 根据权重进行加权随机选择
+            selected_channel = self._weighted_random_select(available_channels)
             
-            logger.info(f"Selected channel '{selected_channel.name}' for model '{model_name}' "
-                       f"(weight: {selected_channel.weight})")
-            
+            logger.info(f"Selected channel: {selected_channel.name} "
+                       f"(provider: {selected_channel.provider}, "
+                       f"weight: {getattr(selected_channel, 'weight', 1)})")
             return selected_channel
             
         except Exception as e:
@@ -81,12 +83,17 @@ class ChannelSelector:
                 logger.debug(f"Using cached channels for model: {model_name}")
                 return cached_channels
             
-            # 从数据库获取所有启用的渠道
-            all_enabled_channels = channel_manager.get_enabled_channels()
+            # 从渠道管理器获取所有启用的渠道
+            all_channels = channel_manager.get_all_channels()
+            enabled_channels = [ch for ch in all_channels if ch.enabled]
+            
+            if not enabled_channels:
+                logger.warning("No enabled channels available")
+                return []
             
             # 筛选支持该模型的渠道
             matching_channels = []
-            for channel in all_enabled_channels:
+            for channel in enabled_channels:
                 if self._channel_supports_model(channel, model_name):
                     matching_channels.append(channel)
             
@@ -103,24 +110,38 @@ class ChannelSelector:
     
     def _channel_supports_model(self, channel: ChannelInfo, model_name: str) -> bool:
         """
-        检查渠道是否支持指定模型
+        检查渠道是否支持指定的模型
         
         Args:
             channel: 渠道信息
-            model_name: 模型名称
+            model_name: 模型名
             
         Returns:
             是否支持该模型
         """
         try:
-            # 检查模型映射中是否包含该模型
-            if model_name in channel.models_mapping:
+            # 检查模型的映射配置
+            if channel.models_mapping and model_name in channel.models_mapping:
+                logger.debug(f"Channel {channel.name} supports model {model_name} via mapping")
                 return True
             
             # 检查是否有通配符匹配
             for mapped_model in channel.models_mapping.keys():
                 if self._is_pattern_match(mapped_model, model_name):
+                    logger.debug(f"Channel {channel.name} supports model {model_name} via pattern match")
                     return True
+            
+            # 检查是否为通用模型（作为fallback）
+            common_models = {
+                "openai": ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o"],
+                "anthropic": ["claude-3-sonnet", "claude-3-opus", "claude-3-haiku"],
+                "gemini": ["gemini-pro", "gemini-pro-vision"]
+            }
+            
+            if model_name in common_models.get(channel.provider, []):
+                logger.debug(f"Channel {channel.name} supports common model {model_name} "
+                           f"for provider {channel.provider}")
+                return True
             
             return False
             
@@ -141,19 +162,17 @@ class ChannelSelector:
         """
         # 简单的通配符匹配实现
         if '*' in pattern:
-            # 将 * 转换为正则表达式
-            import re
             regex_pattern = pattern.replace('*', '.*')
             return re.match(f'^{regex_pattern}$', model_name) is not None
         else:
             return pattern == model_name
     
-    def _select_by_weight(self, channels: List[ChannelInfo]) -> ChannelInfo:
+    def _weighted_random_select(self, channels: List[ChannelInfo]) -> ChannelInfo:
         """
-        根据权重随机选择渠道
+        根据权重进行加权随机选择
         
         Args:
-            channels: 渠道列表
+            channels: 候选渠道列表
             
         Returns:
             选中的渠道
@@ -162,27 +181,29 @@ class ChannelSelector:
             ValueError: 渠道列表为空
         """
         if not channels:
-            raise ValueError("Channel list is empty")
+            raise ValueError("No channels provided for selection")
+        
+        if len(channels) == 1:
+            return channels[0]
         
         # 计算总权重
-        total_weight = sum(channel.weight for channel in channels)
+        total_weight = sum(getattr(channel, 'weight', 1) for channel in channels)
         
         if total_weight <= 0:
             # 如果所有权重都为0，则随机选择
             logger.warning("All channels have zero weight, selecting randomly")
             return random.choice(channels)
         
-        # 生成随机数
+        # 加权随机选择
         random_value = random.uniform(0, total_weight)
-        
-        # 按权重选择
         current_weight = 0
+        
         for channel in channels:
-            current_weight += channel.weight
+            current_weight += getattr(channel, 'weight', 1)
             if random_value <= current_weight:
                 return channel
         
-        # 由于浮点数精度问题，可能没有选中任何渠道，返回最后一个
+        # 兜底：返回最后一个渠道
         return channels[-1]
     
     def _get_from_cache(self, model_name: str) -> Optional[List[ChannelInfo]]:
@@ -228,7 +249,6 @@ class ChannelSelector:
         手动更新所有缓存
         """
         with self._lock:
-            # 清除所有缓存
             self._model_cache.clear()
             self._cache_timestamps.clear()
             logger.info("All cache cleared")
@@ -293,18 +313,18 @@ class ChannelSelector:
                     'channels': []
                 }
             
-            total_weight = sum(channel.weight for channel in available_channels)
+            total_weight = sum(getattr(channel, 'weight', 1) for channel in available_channels)
             
             channel_stats = []
             for channel in available_channels:
-                weight_percentage = (channel.weight / total_weight * 100) if total_weight > 0 else 0
+                weight_percentage = (getattr(channel, 'weight', 1) / total_weight * 100) if total_weight > 0 else 0
                 channel_stats.append({
                     'channel_id': channel.id,
                     'channel_name': channel.name,
                     'provider': channel.provider,
-                    'weight': channel.weight,
+                    'weight': getattr(channel, 'weight', 1),
                     'weight_percentage': round(weight_percentage, 2),
-                    'supported_models': list(channel.models_mapping.keys())
+                    'supported_models': list(channel.models_mapping.keys()) if channel.models_mapping else []
                 })
             
             return {
@@ -332,7 +352,6 @@ class ChannelSelector:
             渠道是否健康
         """
         try:
-            # 基本检查
             if not channel.enabled:
                 logger.debug(f"Channel '{channel.name}' is disabled")
                 return False
@@ -345,14 +364,91 @@ class ChannelSelector:
                 logger.warning(f"Channel '{channel.name}' has no models mapping")
                 return False
             
-            # 这里可以添加更多的健康检查逻辑
-            # 例如：测试连接、检查配额等
-            
             return True
             
         except Exception as e:
             logger.error(f"Error validating channel health for '{channel.name}': {e}")
             return False
+    
+    def get_available_models(self) -> Dict[str, List[str]]:
+        """
+        获取所有可用的模型列表
+        
+        Returns:
+            按提供商分组的模型列表
+        """
+        models_by_provider = {
+            "openai": [],
+            "anthropic": [],
+            "gemini": []
+        }
+        
+        all_channels = channel_manager.get_all_channels()
+        enabled_channels = [ch for ch in all_channels if ch.enabled]
+        
+        for channel in enabled_channels:
+            provider = channel.provider
+            if channel.models_mapping:
+                models_by_provider[provider].extend(channel.models_mapping.keys())
+        
+        # 去重并排序
+        for provider in models_by_provider:
+            models_by_provider[provider] = sorted(list(set(models_by_provider[provider])))
+        
+        return models_by_provider
+    
+    def get_channel_stats(self) -> Dict[str, Any]:
+        """
+        获取渠道统计信息
+        
+        Returns:
+            渠道统计信息
+        """
+        all_channels = channel_manager.get_all_channels()
+        enabled_channels = [ch for ch in all_channels if ch.enabled]
+        
+        stats = {
+            "total_channels": len(all_channels),
+            "enabled_channels": len(enabled_channels),
+            "disabled_channels": len(all_channels) - len(enabled_channels),
+            "channels_by_provider": {
+                "openai": 0,
+                "anthropic": 0,
+                "gemini": 0
+            },
+            "total_weight": 0,
+            "channels": []
+        }
+        
+        for channel in enabled_channels:
+            provider = channel.provider
+            weight = getattr(channel, 'weight', 1)
+            
+            stats["channels_by_provider"][provider] += 1
+            stats["total_weight"] += weight
+            
+            stats["channels"].append({
+                "id": channel.id,
+                "name": channel.name,
+                "provider": provider,
+                "weight": weight,
+                "models_count": len(channel.models_mapping) if channel.models_mapping else 0
+            })
+        
+        return stats
+    
+    def _log_available_models(self) -> None:
+        """
+        记录所有可用的模型映射用于调试
+        """
+        all_channels = channel_manager.get_all_channels()
+        enabled_channels = [ch for ch in all_channels if ch.enabled]
+        
+        available_models = set()
+        for channel in enabled_channels:
+            if channel.models_mapping:
+                available_models.update(channel.models_mapping.keys())
+        logger.info(f"Available models in mappings: {sorted(available_models)}")
 
 
 # 全局渠道选择器实例

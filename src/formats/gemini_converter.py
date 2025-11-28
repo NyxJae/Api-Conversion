@@ -344,7 +344,7 @@ class GeminiConverter(BaseConverter):
                     # 移除max_tokens，使用max_completion_tokens
                     if "max_tokens" in result_data:
                         result_data.pop("max_tokens", None)
-                    self.logger.info(f"Using client maxOutputTokens as max_completion_tokens: {max_completion_tokens}")
+                    self.logger.debug(f"Using client maxOutputTokens as max_completion_tokens: {max_completion_tokens}")
                 else:
                     # 优先级2：环境变量OPENAI_REASONING_MAX_TOKENS
                     import os
